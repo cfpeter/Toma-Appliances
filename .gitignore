@@ -1,0 +1,24 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+.astro/
+
+# cloudflare
+.wrangler/
+
+# env & secrets — NEVER commit these
+.env
+.env.*
+!.env.example
+.dev.vars
+
+# editor / OS
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# local-only credentials, never commit
+LOGIN.local.txt

@@ -1,0 +1,176 @@
+---
+import '../styles/global.css'
+
+interface Props {
+  title: string
+  subtitle?: string
+}
+const { title, subtitle } = Astro.props
+const email = Astro.locals.user?.email ?? ''
+const path = Astro.url.pathname
+
+const nav = [
+  { href: '/admin', label: 'Dashboard' },
+  { href: '/admin/import', label: 'Imports' },
+  { href: '/admin/products', label: 'Products' },
+  { href: '/admin/photos', label: 'Photos' },
+  { href: '/admin/lots', label: 'Lots' },
+  { href: '/admin/sales', label: 'Sales' },
+]
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{title} · Toma Admin</title>
+  </head>
+  <body class="min-h-dvh bg-ink-50 font-sans text-ink-900 antialiased">
+    <!-- Navigation/submit progress. Every action here is a full page POST, so
+         without this the UI looks frozen while the server works. -->
+    <div id="progress" aria-hidden="true"
+      class="pointer-events-none fixed inset-x-0 top-0 z-50 h-0.5 origin-left scale-x-0 bg-brand-500 opacity-0 transition-transform duration-300"></div>
+
+    <header class="sticky top-0 z-10 border-b border-ink-100 bg-white/85 backdrop-blur">
+      <div class="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3 sm:px-6">
+        <a href="/admin" class="font-semibold tracking-tight">Toma<span class="text-brand-600">Admin</span></a>
+        <nav class="flex flex-1 gap-1 overflow-x-auto">
+          {nav.map((n) => (
+            <a
+              href={n.href}
+              class:list={[
+                'rounded-lg px-3 py-1.5 text-sm font-medium whitespace-nowrap transition',
+                path === n.href || (n.href !== '/admin' && path.startsWith(n.href))
+                  ? 'bg-brand-500/10 text-brand-700'
+                  : 'text-ink-500 hover:bg-ink-100 hover:text-ink-900',
+              ]}
+            >{n.label}</a>
+          ))}
+        </nav>
+        <span class="hidden text-xs text-ink-300 sm:block">{email}</span>
+      </div>
+    </header>
+
+    <main class="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+      <div class="mb-6">
+        <h1 class="text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h1>
+        {subtitle && <p class="mt-1 text-sm text-ink-500">{subtitle}</p>}
+      </div>
+      <slot />
+    </main>
+
+    <script is:inline>
+      (() => {
+        const bar = document.getElementById('progress')
+
+        function startBar() {
+          if (!bar) return
+          bar.style.transitionDuration = '0s'
+          bar.style.transform = 'scaleX(0)'
+          bar.style.opacity = '1'
+          requestAnimationFrame(() => {
+            // Creeps toward 90% and waits there — the page load finishes it.
+            bar.style.transitionDuration = '10s'
+            bar.style.transform = 'scaleX(0.9)'
+          })
+        }
+
+        const SPINNER =
+          '<svg class="size-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+          '<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" opacity="0.25"/>' +
+          '<path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>'
+
+        /**
+         * Lock a form while it submits: disable every button in it, show a
+         * spinner on the one that was pressed, and refuse a second submit.
+         * Returns false if the form is already working.
+         */
+        function markBusy(form, submitter) {
+          if (!form || form.dataset.busy === '1') return false
+          form.dataset.busy = '1'
+
+          // A disabled control is left out of the submitted form data -- and
+          // that includes the button that was just pressed. Disabling the
+          // submitter therefore drops its name/value, so `intent=sell` never
+          // reaches the server and the handler falls through to its default
+          // branch. Carry the pair in a hidden field before locking anything.
+          if (submitter instanceof HTMLElement && submitter.name) {
+            const carry = document.createElement('input')
+            carry.type = 'hidden'
+            carry.name = submitter.name
+            carry.value = submitter.value
+            carry.dataset.carriedIntent = '1'
+            form.appendChild(carry)
+          }
+
+          for (const b of form.querySelectorAll('button')) {
+            b.disabled = true
+            b.classList.add('cursor-not-allowed')
+          }
+          if (submitter instanceof HTMLElement) {
+            submitter.dataset.prevHtml = submitter.innerHTML
+            const label = (submitter.textContent || '').trim()
+            submitter.innerHTML =
+              '<span class="inline-flex items-center gap-2">' + SPINNER +
+              '<span>' + (label.length > 18 ? 'Working…' : label + '…') + '</span></span>'
+            submitter.setAttribute('aria-busy', 'true')
+          }
+          startBar()
+          return true
+        }
+        window.__tomaBusy = markBusy
+
+        document.addEventListener(
+          'submit',
+          (event) => {
+            const form = event.target
+            if (!(form instanceof HTMLFormElement)) return
+            if (form.dataset.busy === '1') {
+              event.preventDefault() // already in flight — swallow the double click
+              return
+            }
+            markBusy(form, event.submitter)
+          },
+          true,
+        )
+
+        // Plain navigation gets the bar too, so links feel as responsive as forms.
+        document.addEventListener('click', (event) => {
+          const link = event.target instanceof Element ? event.target.closest('a[href]') : null
+          if (!link) return
+          const href = link.getAttribute('href') || ''
+          if (link.target || href.startsWith('#') || href.startsWith('http')) return
+          if (event.metaKey || event.ctrlKey || event.shiftKey) return
+          startBar()
+        })
+
+        // Coming back via the browser's back button restores a cached page that
+        // still thinks it is busy. Unlock it.
+        window.addEventListener('pageshow', (event) => {
+          if (!event.persisted) return
+          for (const stale of document.querySelectorAll('input[data-carried-intent="1"]')) {
+            stale.remove()
+          }
+          for (const form of document.querySelectorAll('form[data-busy="1"]')) {
+            delete form.dataset.busy
+            for (const b of form.querySelectorAll('button')) {
+              b.disabled = false
+              b.classList.remove('cursor-not-allowed')
+              if (b.dataset.prevHtml) {
+                b.innerHTML = b.dataset.prevHtml
+                delete b.dataset.prevHtml
+                b.removeAttribute('aria-busy')
+              }
+            }
+          }
+          if (bar) {
+            bar.style.opacity = '0'
+            bar.style.transitionDuration = '0s'
+            bar.style.transform = 'scaleX(0)'
+          }
+        })
+      })()
+    </script>
+  </body>
+</html>

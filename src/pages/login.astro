@@ -1,0 +1,58 @@
+---
+import '../styles/global.css'
+import { createSupabaseServerClient } from '../lib/supabase/server.ts'
+
+let error = ''
+const next = Astro.url.searchParams.get('next') ?? '/admin'
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const email = String(form.get('email') ?? '')
+  const password = String(form.get('password') ?? '')
+
+  const supabase = createSupabaseServerClient(Astro.cookies, Astro.request)
+  const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+
+  if (signInError) error = signInError.message
+  else return Astro.redirect(String(form.get('next') ?? '/admin'), 303)
+}
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Sign in · Toma Appliances</title>
+  </head>
+  <body class="min-h-dvh bg-ink-50 font-sans text-ink-900 antialiased">
+    <main class="mx-auto flex min-h-dvh max-w-sm flex-col justify-center px-6">
+      <h1 class="text-2xl font-semibold tracking-tight">Toma<span class="text-brand-600">Admin</span></h1>
+      <p class="mt-1 text-sm text-ink-500">Sign in to manage inventory.</p>
+
+      {error && (
+        <p class="mt-5 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+      )}
+
+      <form method="POST" class="mt-6 space-y-4">
+        <input type="hidden" name="next" value={next} />
+        <div>
+          <label for="email" class="block text-sm font-medium">Email</label>
+          <input id="email" name="email" type="email" required autocomplete="email"
+            class="mt-1 w-full rounded-lg border border-ink-100 bg-white px-3 py-2.5 text-base outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20" />
+        </div>
+        <div>
+          <label for="password" class="block text-sm font-medium">Password</label>
+          <input id="password" name="password" type="password" required autocomplete="current-password"
+            class="mt-1 w-full rounded-lg border border-ink-100 bg-white px-3 py-2.5 text-base outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20" />
+        </div>
+        <button type="submit"
+          class="w-full rounded-lg bg-brand-600 px-4 py-2.5 font-medium text-white transition hover:bg-brand-700">
+          Sign in
+        </button>
+      </form>
+
+      <p class="mt-6 text-xs text-ink-300">Accounts are created by invitation only.</p>
+    </main>
+  </body>
+</html>

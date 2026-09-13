@@ -1,0 +1,364 @@
+---
+import ConfirmAction from '../../../components/admin/ConfirmAction.astro'
+import Stepper from '../../../components/admin/Stepper.astro'
+import Admin from '../../../layouts/Admin.astro'
+import { formatCents, toCents } from '../../../lib/money.ts'
+
+const supabase = Astro.locals.supabase!
+const { id } = Astro.params
+let notice = ''
+let error = ''
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const intent = String(form.get('intent') ?? 'save')
+
+  if (intent === 'delete' || intent === 'force_delete') {
+    const { data, error: e } = await supabase.rpc('delete_lot', {
+      p_lot_id: id,
+      p_force: intent === 'force_delete',
+    })
+    if (e) {
+      // The sales guard raises rather than returning, so surface its message.
+      notice = ''
+      error = e.message
+    } else {
+      const r = data as { lot_code: string; units_removed: number; products_removed: number }
+      return Astro.redirect(
+        `/admin/lots?deleted=${encodeURIComponent(r.lot_code)}&units=${r.units_removed}&products=${r.products_removed}`,
+        303,
+      )
+    }
+  }
+
+  if (intent === 'archive' || intent === 'unarchive') {
+    await supabase.rpc('archive_lot', { p_lot_id: id, p_archived: intent === 'archive' })
+    return Astro.redirect(`/admin/lots/${id}`, 303)
+  }
+
+  if (intent === 'save' && !error) {
+    const inFlow = String(form.get('flow_import') ?? '')
+    await supabase
+      .from('lots')
+      .update({
+        bid_cents: toCents(String(form.get('bid') ?? '')) ?? 0,
+        service_fee_cents: toCents(String(form.get('service_fee') ?? '')) ?? 0,
+        freight_cents: toCents(String(form.get('freight') ?? '')) ?? 0,
+        other_cost_cents: toCents(String(form.get('other') ?? '')) ?? 0,
+        purchase_date: String(form.get('purchase_date') ?? '') || null,
+      })
+      .eq('id', id)
+
+    // Allocation needs stock lines, which only exist once an import is committed.
+    const { count } = await supabase
+      .from('stock_lines')
+      .select('*', { count: 'exact', head: true })
+      .eq('lot_id', id)
+
+    if ((count ?? 0) > 0) {
+      const { error } = await supabase.rpc('allocate_lot_costs', { p_lot_id: id })
+      notice = error
+        ? `Allocation failed: ${error.message}`
+        : 'Cost saved and allocated across every unit.'
+    } else {
+      notice = 'Cost saved. It will be spread across the units when you commit this lot’s import.'
+    }
+
+    // Mid-flow, hand straight on to step 3 rather than stopping here.
+    if (inFlow) return Astro.redirect(`/admin/import/${inFlow}`, 303)
+  }
+}
+
+const { data: lot } = await supabase
+  .from('lots')
+  .select('*, sources(code, name, fee_percent)')
+  .eq('id', id)
+  .single()
+if (!lot) return Astro.redirect('/admin/lots', 302)
+
+const { data: imports } = await supabase
+  .from('imports')
+  .select('id, filename, status')
+  .eq('lot_id', id)
+const importIds = (imports ?? []).map((i) => i.id)
+const { data: rows } = importIds.length
+  ? await supabase.from('import_rows').select('qty, unit_retail_cents').in('import_id', importIds)
+  : { data: [] }
+
+// Once committed the real inventory lives in stock_lines, and an import record
+// can be deleted later — counting staged rows would report a full lot as empty.
+const { data: stockLines } = await supabase
+  .from('stock_lines')
+  .select('qty_received, msrp_cents')
+  .eq('lot_id', id)
+const hasStock = (stockLines ?? []).length > 0
+
+const units = hasStock
+  ? (stockLines ?? []).reduce((s, l) => s + (l.qty_received ?? 0), 0)
+  : (rows ?? []).reduce((s, r) => s + (r.qty ?? 0), 0)
+const retail = hasStock
+  ? (stockLines ?? []).reduce((s, l) => s + (l.qty_received ?? 0) * (l.msrp_cents ?? 0), 0)
+  : (rows ?? []).reduce((s, r) => s + (r.qty ?? 0) * (r.unit_retail_cents ?? 0), 0)
+
+const { data: preview } = await supabase.rpc('lot_delete_preview', { p_lot_id: id })
+const p = (preview ?? {}) as {
+  units: number
+  products_removed: number
+  products_kept: number
+  sales: number
+  imports: number
+}
+const hasSales = (p.sales ?? 0) > 0
+
+const deleteMessage = hasSales
+  ? ''
+  : `Removes ${p.units ?? 0} unit${p.units === 1 ? '' : 's'} and ${p.products_removed ?? 0} product${p.products_removed === 1 ? '' : 's'}` +
+    ((p.products_kept ?? 0) > 0
+      ? `. ${p.products_kept} product${p.products_kept === 1 ? '' : 's'} stay because they also hold stock from other lots.`
+      : '.') +
+    ' This cannot be undone.'
+
+// Set when we arrived here as step 2 of the upload flow.
+const flowImportId = Astro.url.searchParams.get('import')
+
+const { data: allLotsRaw } = await supabase
+  .from('lots')
+  .select('id, lot_code, archived_at')
+  .order('lot_code')
+const allLots = allLotsRaw ?? []
+const otherLots = allLots.filter((l) => l.id !== id)
+
+const feeRate = Number(lot.service_fee_rate ?? (lot.sources as any)?.fee_percent ?? 0)
+const feeName = (lot.sources as any)?.name ?? 'Marketplace'
+const dollars = (c: number | null) => (c ? (c / 100).toFixed(2) : '')
+
+// What the money actually means, before anything is committed.
+const landed = lot.landed_cost_cents ?? 0
+const avgPerUnit = units > 0 && landed > 0 ? Math.round(landed / units) : null
+const pctOfRetail = retail > 0 && landed > 0 ? ((landed / retail) * 100).toFixed(1) : null
+---
+
+<Admin title={`Lot ${lot.lot_code}`} subtitle={lot.vendor ?? undefined}>
+  <nav class="mb-4 flex flex-wrap items-center gap-2 text-sm">
+    <a href="/admin/lots" class="text-brand-600 hover:underline">← All lots</a>
+    {otherLots.length > 0 && (
+      <>
+        <span class="text-ink-300">·</span>
+        <label class="flex items-center gap-2">
+          <span class="text-ink-500">Jump to</span>
+          <select
+            onchange="if(this.value) location.href=this.value"
+            class="rounded-lg border border-ink-100 bg-white px-2 py-1 text-sm outline-none focus:border-brand-500"
+          >
+            {allLots.map((l) => (
+              <option value={`/admin/lots/${l.id}`} selected={l.id === id}>
+                {l.lot_code}{l.archived_at ? ' (archived)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+      </>
+    )}
+  </nav>
+
+  {flowImportId && (
+    <Stepper current={2} importId={flowImportId} lotId={id}
+      done={(lot.landed_cost_cents ?? 0) > 0 ? [1, 2] : [1]} />
+  )}
+
+  {flowImportId && (
+    <div class="mb-6 rounded-xl border border-brand-500/30 bg-brand-500/[0.04] p-4">
+      <p class="font-medium">What did this truckload cost you?</p>
+      <p class="mt-1 text-sm text-ink-500">
+        The manifest only lists MSRP. Enter your winning bid and the fees below and every unit
+        gets a real cost the moment you commit — so the next screen shows true margins instead
+        of blanks. You can skip and come back, but nothing will show a margin until you do.
+      </p>
+    </div>
+  )}
+  {notice && (
+    <p class="mb-5 rounded-lg bg-brand-500/[0.08] px-4 py-3 text-sm text-brand-700">{notice}</p>
+  )}
+  {error && <p class="mb-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+
+  {lot.archived_at && (
+    <div class="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-ink-100 bg-ink-100/60 p-4">
+      <p class="flex-1 text-sm text-ink-500">
+        This lot is archived — hidden from the list, but its stock and history are intact.
+      </p>
+      <form method="POST">
+        <button type="submit" name="intent" value="unarchive"
+          class="rounded-lg border border-ink-100 bg-white px-4 py-2 text-sm font-medium transition hover:bg-ink-50">
+          Un-archive
+        </button>
+      </form>
+    </div>
+  )}
+
+  <div class="grid gap-6 lg:grid-cols-[22rem_minmax(0,1fr)]">
+    <form method="POST" class="rounded-xl border border-ink-100 bg-white p-5">
+      {flowImportId && <input type="hidden" name="flow_import" value={flowImportId} />}
+      <h2 class="font-semibold">What you paid</h2>
+      <p class="mt-1 text-xs text-ink-500">
+        The manifest never contains this — it's your winning bid, not the sticker prices.
+      </p>
+
+      <div class="mt-4 space-y-3">
+        {[
+          { name: 'bid', label: 'Winning bid', value: dollars(lot.bid_cents) },
+          { name: 'service_fee', label: 'Service fee', value: dollars(lot.service_fee_cents) },
+          { name: 'freight', label: 'Freight / shipping', value: dollars(lot.freight_cents) },
+          { name: 'other', label: 'Other costs', value: dollars(lot.other_cost_cents) },
+        ].map((f) => (
+          <label class="block">
+            <span class="text-sm font-medium">{f.label}</span>
+            <div class="mt-1 flex items-center rounded-lg border border-ink-100 bg-white focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500/20">
+              <span class="pl-3 text-ink-300">$</span>
+              <input name={f.name} id={`f-${f.name}`} value={f.value} inputmode="decimal" placeholder="0.00"
+                class="w-full bg-transparent px-2 py-2.5 text-base tabular-nums outline-none" />
+            </div>
+          </label>
+        ))}
+        <label class="block">
+          <span class="text-sm font-medium">Purchase date</span>
+          <input type="date" name="purchase_date" value={lot.purchase_date ?? ''}
+            class="mt-1 w-full rounded-lg border border-ink-100 bg-white px-3 py-2.5 text-base outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20" />
+        </label>
+      </div>
+
+      {feeRate > 0 && (
+        <p class="mt-3 text-xs text-ink-300">
+          {feeName} charges {(feeRate * 100).toFixed(feeRate * 100 % 1 === 0 ? 0 : 2)}% of the
+          winning bid. The service fee fills in automatically — edit it if your invoice differs.
+        </p>
+      )}
+
+      <div class="mt-4 flex items-baseline justify-between border-t border-ink-100 pt-4">
+        <span class="text-sm text-ink-500">Landed cost</span>
+        <span class="text-xl font-semibold tabular-nums">{formatCents(landed)}</span>
+      </div>
+
+      <button type="submit" name="intent" value="save"
+        class="mt-4 w-full rounded-lg bg-brand-600 px-4 py-2.5 font-medium text-white transition hover:bg-brand-700">
+        {flowImportId
+          ? 'Save & continue to review →'
+          : `Save ${lot.costs_allocated_at ? '& re-allocate' : 'cost'}`}
+      </button>
+
+      {flowImportId && (
+        <a href={`/admin/import/${flowImportId}`}
+          class="mt-3 block text-center text-sm text-ink-500 hover:underline">
+          Skip for now — I'll add the cost later
+        </a>
+      )}
+    </form>
+
+
+    <div class="space-y-4">
+      <div class="grid gap-3 sm:grid-cols-2">
+        {[
+          { l: 'Units in this lot', v: units },
+          { l: 'Total MSRP', v: formatCents(retail) },
+          { l: 'Average cost per unit', v: avgPerUnit ? formatCents(avgPerUnit) : '—' },
+          { l: 'Paid vs. retail', v: pctOfRetail ? `${pctOfRetail}%` : '—' },
+        ].map((t) => (
+          <div class="rounded-xl border border-ink-100 bg-white px-4 py-3">
+            <div class="text-xl font-semibold tabular-nums">{t.v}</div>
+            <div class="mt-0.5 text-xs text-ink-500">{t.l}</div>
+          </div>
+        ))}
+      </div>
+
+      <div class="rounded-xl border border-ink-100 bg-white p-5">
+        <h2 class="font-semibold">Manifests</h2>
+        <ul class="mt-3 space-y-2 text-sm">
+          {(imports ?? []).map((i) => (
+            <li class="flex items-center justify-between gap-3">
+              <span class="min-w-0 flex-1 truncate text-ink-500" title={i.filename}>{i.filename}</span>
+              <span class="flex shrink-0 items-center gap-3">
+                <span class:list={['rounded-md px-2 py-0.5 text-xs font-medium',
+                  i.status === 'pending' ? 'bg-brand-500/10 text-brand-700' : 'bg-ink-100 text-ink-500']}>
+                  {i.status}
+                </span>
+                <a href={`/admin/import/${i.id}`} class="font-medium text-brand-600 hover:underline">Review →</a>
+              </span>
+            </li>
+          ))}
+        </ul>
+        {!lot.costs_allocated_at && (
+          <p class="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Cost is spread across units in proportion to retail value — expensive units absorb
+            more, cheap ones less. It runs once this lot's import is committed.
+          </p>
+        )}
+      </div>
+      <div class="rounded-xl border border-red-200 bg-white p-5">
+        <h2 class="font-semibold">Delete this lot</h2>
+        {hasSales ? (
+          <>
+            <p class="mt-2 text-sm text-ink-500">
+              {p.sales} sale{p.sales === 1 ? ' has' : 's have'} been recorded against this lot,
+              so it can't be deleted — that would erase revenue you've already earned and change
+              past profit figures. Archive it instead: it disappears from the list, everything
+              stays in the books.
+            </p>
+            <form method="POST" class="mt-4 flex flex-wrap items-center gap-3">
+              <ConfirmAction intent="archive" label="Archive lot"
+                title={`Archive lot ${lot.lot_code}?`}
+                message="It disappears from the lots list. Stock, sales and profit history are all kept, and you can un-archive it at any time."
+                confirmLabel="Archive" tone="warn"
+                class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 transition hover:bg-amber-100" />
+              <ConfirmAction intent="force_delete" label="Delete anyway"
+                title={`Delete lot ${lot.lot_code} and its sales?`}
+                message={`This lot has ${p.sales} recorded sale${p.sales === 1 ? '' : 's'}. Deleting it removes ${p.units ?? 0} unit${p.units === 1 ? '' : 's'}, ${p.products_removed ?? 0} product${p.products_removed === 1 ? '' : 's'} and those sales. Only do this if the lot was entered by mistake — the revenue disappears from every report. This cannot be undone.`}
+                confirmLabel="Delete lot and sales" tone="danger"
+                class="text-sm text-red-600 hover:underline" />
+            </form>
+          </>
+        ) : (
+          <>
+            <p class="mt-2 text-sm text-ink-500">
+              {(p.units ?? 0) === 0 && (p.imports ?? 0) > 0
+                ? 'Nothing from this lot has been committed yet, so only the lot and its staged manifest are removed. No products or stock are affected.'
+                : 'Removes the lot, its manifest, its stock, and any product left with nothing in it. Products that also hold stock from another truckload are kept.'}
+            </p>
+            <dl class:list={['mt-3 space-y-1 text-sm', (p.units ?? 0) === 0 && 'hidden']}>
+              <div class="flex justify-between"><dt class="text-ink-500">Units removed</dt>
+                <dd class="font-medium tabular-nums">{p.units ?? 0}</dd></div>
+              <div class="flex justify-between"><dt class="text-ink-500">Products removed</dt>
+                <dd class="font-medium tabular-nums">{p.products_removed ?? 0}</dd></div>
+              <div class="flex justify-between"><dt class="text-ink-500">Products kept (shared)</dt>
+                <dd class="font-medium tabular-nums">{p.products_kept ?? 0}</dd></div>
+            </dl>
+            <form method="POST" class="mt-4">
+              <ConfirmAction intent="delete" label="Delete lot"
+                title={`Delete lot ${lot.lot_code}?`}
+                message={deleteMessage}
+                confirmLabel="Delete lot" tone="danger"
+                class="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-700" />
+            </form>
+          </>
+        )}
+      </div>
+    </div>
+  </div>
+
+  <script is:inline define:vars={{ feeRate }}>
+      (() => {
+        const bid = document.getElementById('f-bid')
+        const fee = document.getElementById('f-service_fee')
+        if (!bid || !fee || !feeRate) return
+
+        // Suggest the fee from the bid, but never overwrite a figure typed by
+        // hand — the actual invoice always wins over the formula.
+        let touched = fee.value.trim() !== ''
+        fee.addEventListener('input', () => { touched = true })
+
+        bid.addEventListener('input', () => {
+          if (touched) return
+          const amount = Number.parseFloat(bid.value.replace(/[$,\s]/g, ''))
+          fee.value = Number.isFinite(amount) ? (amount * feeRate).toFixed(2) : ''
+        })
+      })()
+    </script>
+</Admin>

@@ -1,0 +1,37 @@
+{
+  // Cloudflare configuration. Astro's adapter reads the bindings from here,
+  // and `platformProxy` in astro.config.mjs makes the same bindings available
+  // during `astro dev` -- backed by a local simulation, so photo upload can be
+  // developed and tested without a Cloudflare account or a live bucket.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "toma-appliances",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // The live site. `custom_domain` makes Cloudflare create and manage the DNS
+  // record and certificate; www exists only so it can 301 to the apex, which
+  // the middleware does.
+  "routes": [
+    { "pattern": "tomaappliances.com", "custom_domain": true },
+    { "pattern": "www.tomaappliances.com", "custom_domain": true }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "PHOTOS",
+      "bucket_name": "toma-appliances-photos",
+      // `astro dev` reads and writes the REAL bucket rather than a local
+      // stand-in, so a photo taken while testing is genuinely in the cloud and
+      // can be opened from another device. Needs a workers.dev subdomain on
+      // the account; without one the dev server refuses to start (error 10063).
+      "remote": true
+      // Deliberately no `preview_bucket_name`. It does not only affect remote
+      // preview: miniflare names the LOCAL on-disk store after it, so setting
+      // it puts development photos under a different namespace, and removing
+      // it later strands every object already written there. One name, used
+      // by both the local store and the real bucket, keeps that from biting.
+      //
+      // Local development never touches the cloud bucket either way -- resets
+      // have to be free and instant, not a round trip to R2.
+    }
+  ]
+}

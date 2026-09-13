@@ -1,0 +1,81 @@
+---
+/**
+ * The four steps of bringing a truckload in. Shown on every page in the flow so
+ * it is always obvious what has been done and what is still owed — the cost
+ * step in particular used to be a page you had to already know about.
+ */
+interface Props {
+  current: 1 | 2 | 3 | 4
+  importId?: string
+  lotId?: string
+  /** Steps finished, so they can be revisited. */
+  done?: number[]
+}
+
+const { current, importId, lotId, done = [] } = Astro.props
+
+const steps = [
+  { n: 1, label: 'Upload', href: '/admin/import' },
+  // Step 2 must carry the import id as well as the lot id. Without it the lot
+  // page cannot tell it is mid-flow, hides the stepper, and strands the user.
+  {
+    n: 2,
+    label: 'What you paid',
+    href: lotId ? `/admin/lots/${lotId}?import=${importId ?? ''}` : undefined,
+  },
+  { n: 3, label: 'Review', href: importId ? `/admin/import/${importId}` : undefined },
+  {
+    n: 4,
+    label: 'Price & publish',
+    href: lotId ? `/admin/products/pricing?lot=${lotId}` : undefined,
+  },
+]
+---
+
+<ol class="mb-6 flex flex-wrap items-center gap-x-2 gap-y-2 text-sm">
+  {steps.map((s, i) => {
+    // "Done" is only what the caller says is genuinely finished — reaching
+    // Review does not mean a cost was entered. Reachability is separate: any
+    // step up to the current one is navigable, finished or not.
+    const isDone = done.includes(s.n)
+    const isCurrent = s.n === current
+    const clickable = s.n <= current && Boolean(s.href)
+    const Tag = clickable ? 'a' : 'span'
+    return (
+      <>
+        <li>
+          <Tag
+            href={clickable ? s.href : undefined}
+            class:list={[
+              'flex items-center gap-2 rounded-lg px-2.5 py-1.5 transition',
+              isCurrent
+                ? 'bg-brand-500/10 font-medium text-brand-700'
+                : isDone
+                  ? 'text-ink-500 hover:bg-ink-100'
+                  : clickable
+                    ? 'text-amber-700 hover:bg-amber-50'
+                    : 'text-ink-300',
+            ]}
+          >
+            <span
+              class:list={[
+                'flex size-5 shrink-0 items-center justify-center rounded-full text-xs font-semibold',
+                isCurrent
+                  ? 'bg-brand-600 text-white'
+                  : isDone
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : clickable
+                      ? 'bg-amber-100 text-amber-700'
+                      : 'bg-ink-100 text-ink-300',
+              ]}
+            >
+              {isDone && !isCurrent ? '✓' : s.n}
+            </span>
+            {s.label}
+          </Tag>
+        </li>
+        {i < steps.length - 1 && <li aria-hidden="true" class="text-ink-300">→</li>}
+      </>
+    )
+  })}
+</ol>

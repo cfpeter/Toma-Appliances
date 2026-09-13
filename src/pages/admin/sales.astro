@@ -1,0 +1,151 @@
+---
+/**
+ * What sold, and what it actually went for.
+ *
+ * Reads `sales_ledger`, which carries the asking price and the unit cost as
+ * they stood at the moment of sale. Nothing here recomputes from today's
+ * product price -- that is exactly the number that moves.
+ */
+import Admin from '../../layouts/Admin.astro'
+import { conditionLabel } from '../../lib/condition.ts'
+import { formatCents } from '../../lib/money.ts'
+
+const supabase = Astro.locals.supabase!
+
+// Month filter, newest first. `all` is the escape hatch for a full history.
+const monthParam = Astro.url.searchParams.get('month') ?? ''
+const { data: rows } = await supabase
+  .from('sales_ledger')
+  .select('*')
+  .order('sold_at', { ascending: false })
+
+const all = rows ?? []
+const monthKey = (iso: string) => iso.slice(0, 7)
+const months = [...new Set(all.map((r) => monthKey(r.sold_at)))].sort().reverse()
+const month = monthParam || months[0] || ''
+const list = monthParam === 'all' ? all : all.filter((r) => monthKey(r.sold_at) === month)
+
+const sum = (f: (r: (typeof all)[number]) => number) => list.reduce((a, r) => a + (f(r) || 0), 0)
+const units = sum((r) => r.qty)
+const revenue = sum((r) => r.revenue_cents)
+const margin = sum((r) => r.margin_cents)
+// Discount is money given away, measured against what the units were listed at.
+const asked = sum((r) => (r.list_price_cents ?? r.sale_price_cents) * r.qty)
+const givenAway = asked - revenue
+const costKnown = list.every((r) => r.unit_cost_cents != null)
+
+const monthLabel = (k: string) =>
+  new Date(`${k}-02`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+
+const card = 'rounded-xl border border-ink-100 bg-white p-5'
+---
+
+<Admin title="Sales" subtitle="What sold, and what it actually went for.">
+  {all.length === 0 ? (
+    <div class="rounded-xl border border-dashed border-ink-100 bg-white p-10 text-center">
+      <p class="font-medium text-ink-900">No sales recorded yet.</p>
+      <p class="mt-1 text-sm text-ink-500">
+        Open a product and use <strong>Record a sale</strong>. The asking price is saved
+        alongside whatever you settled on, so the difference is still there months later.
+      </p>
+      <a href="/admin/products" class="mt-4 inline-block rounded-lg bg-ink-900 px-4 py-2 text-sm font-medium text-white hover:bg-ink-700">
+        Go to products
+      </a>
+    </div>
+  ) : (
+    <>
+      <div class="mb-5 flex flex-wrap items-center gap-2">
+        {months.map((m) => (
+          <a href={`/admin/sales?month=${m}`}
+            class:list={['rounded-lg px-3 py-1.5 text-sm font-medium transition',
+              monthParam !== 'all' && m === month
+                ? 'bg-brand-500/10 text-brand-700'
+                : 'text-ink-500 hover:bg-ink-100 hover:text-ink-900']}>{monthLabel(m)}</a>
+        ))}
+        <a href="/admin/sales?month=all"
+          class:list={['rounded-lg px-3 py-1.5 text-sm font-medium transition',
+            monthParam === 'all' ? 'bg-brand-500/10 text-brand-700'
+              : 'text-ink-500 hover:bg-ink-100 hover:text-ink-900']}>All time</a>
+      </div>
+
+      <div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div class={card}>
+          <div class="text-xs tracking-wide text-ink-500 uppercase">Units sold</div>
+          <div class="mt-1 text-3xl font-semibold tabular-nums">{units}</div>
+        </div>
+        <div class={card}>
+          <div class="text-xs tracking-wide text-ink-500 uppercase">Taken in</div>
+          <div class="mt-1 text-3xl font-semibold tabular-nums">{formatCents(revenue)}</div>
+        </div>
+        <div class={card}>
+          <div class="text-xs tracking-wide text-ink-500 uppercase">Off asking</div>
+          <div class:list={['mt-1 text-3xl font-semibold tabular-nums',
+            givenAway > 0 ? 'text-amber-700' : 'text-ink-900']}>
+            {givenAway === 0 ? '—' : formatCents(Math.abs(givenAway))}
+          </div>
+          <div class="mt-1 text-xs text-ink-500">
+            {givenAway > 0 ? `${Math.round((givenAway / asked) * 100)}% below list`
+              : givenAway < 0 ? 'above list' : 'sold at list'}
+          </div>
+        </div>
+        <div class={card}>
+          <div class="text-xs tracking-wide text-ink-500 uppercase">Profit</div>
+          <div class="mt-1 text-3xl font-semibold tabular-nums">
+            {costKnown ? formatCents(margin) : '—'}
+          </div>
+          {!costKnown && (
+            <div class="mt-1 text-xs text-amber-700">
+              Needs a lot cost — <a href="/admin/lots" class="underline">enter what you paid</a>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div class="overflow-x-auto rounded-xl border border-ink-100 bg-white">
+        <table class="w-full min-w-[54rem] text-sm">
+          <thead class="border-b border-ink-100 text-left text-xs tracking-wide text-ink-500 uppercase">
+            <tr>
+              <th class="px-4 py-3 font-medium">Date</th>
+              <th class="px-4 py-3 font-medium">Product</th>
+              <th class="px-4 py-3 text-right font-medium">Qty</th>
+              <th class="px-4 py-3 text-right font-medium">Asking</th>
+              <th class="px-4 py-3 text-right font-medium">Sold for</th>
+              <th class="px-4 py-3 text-right font-medium">Difference</th>
+              <th class="px-4 py-3 text-right font-medium">Profit</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-ink-100">
+            {list.map((r) => (
+              <tr class="hover:bg-ink-50/60">
+                <td class="px-4 py-3 whitespace-nowrap text-ink-500">
+                  {new Date(r.sold_at).toLocaleDateString()}
+                </td>
+                <td class="px-4 py-3">
+                  <a href={`/admin/products/${r.product_id}`} class="font-medium hover:text-brand-600 hover:underline">{r.name}</a>
+                  <div class="text-xs text-ink-300">
+                    {conditionLabel(r.condition)}{r.note ? ` · ${r.note}` : ''}
+                  </div>
+                </td>
+                <td class="px-4 py-3 text-right tabular-nums">{r.qty}</td>
+                <td class="px-4 py-3 text-right tabular-nums text-ink-500">
+                  {r.list_price_cents != null ? formatCents(r.list_price_cents) : '—'}
+                </td>
+                <td class="px-4 py-3 text-right font-medium tabular-nums">{formatCents(r.sale_price_cents)}</td>
+                <td class="px-4 py-3 text-right tabular-nums">
+                  {r.discount_cents == null || r.discount_cents === 0 ? <span class="text-ink-300">—</span>
+                    : r.discount_cents > 0
+                      ? <span class="text-amber-700">−{formatCents(r.discount_cents)}</span>
+                      : <span class="text-emerald-700">+{formatCents(-r.discount_cents)}</span>}
+                </td>
+                <td class="px-4 py-3 text-right tabular-nums">
+                  {r.margin_cents == null ? <span class="text-ink-300">—</span>
+                    : <span class={r.margin_cents < 0 ? 'text-red-700' : ''}>{formatCents(r.margin_cents)}</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  )}
+</Admin>

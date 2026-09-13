@@ -1,0 +1,286 @@
+---
+import ConfirmAction from '../../../components/admin/ConfirmAction.astro'
+import PhotoUploader from '../../../components/admin/PhotoUploader.astro'
+import Admin from '../../../layouts/Admin.astro'
+import { CONDITIONS, conditionLabel, conditionNote } from '../../../lib/condition.ts'
+import { formatCents, toCents } from '../../../lib/money.ts'
+
+const supabase = Astro.locals.supabase!
+const { id } = Astro.params
+let notice = ''
+let error = ''
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const intent = String(form.get('intent') ?? 'save')
+
+  if (intent === 'sell') {
+    const qty = Number.parseInt(String(form.get('sell_qty') ?? '1'), 10)
+    const price = toCents(String(form.get('sell_price') ?? ''))
+    if (!qty || qty < 1) error = 'Quantity must be at least 1.'
+    else if (!price) error = 'Enter what it sold for.'
+    else {
+      const { error: e } = await supabase.from('sales').insert({
+        product_id: id,
+        qty,
+        sale_price_cents: price,
+        note: String(form.get('sell_note') ?? '') || null,
+      })
+      error = e?.message ?? ''
+      if (!e) notice = `Recorded: ${qty} sold at ${formatCents(price)}.`
+    }
+  } else if (intent === 'delete') {
+    await supabase.from('products').update({ status: 'deleted' }).eq('id', id)
+    return Astro.redirect('/admin/products?deleted=1', 303)
+  } else if (!form.has('name')) {
+    // Defence in depth. The edit form is the only thing that carries `name`;
+    // any other POST landing here means an intent went missing in transit,
+    // and treating absent fields as "set these to empty" silently erases a
+    // product. Refuse instead.
+    error = 'That submission did not include the product fields — nothing was changed.'
+  } else {
+    const status = String(form.get('status') ?? 'draft')
+    const price = toCents(String(form.get('price') ?? ''))
+    const patch: Record<string, unknown> = {
+      name: String(form.get('name') ?? '').trim(),
+      brand: String(form.get('brand') ?? '').trim() || null,
+      model: String(form.get('model') ?? '').trim() || null,
+      description: String(form.get('description') ?? '').trim() || null,
+      category_id: String(form.get('category_id') ?? '') || null,
+      condition: String(form.get('condition') ?? '') || null,
+      price_cents: price,
+      status,
+    }
+    // Publishing for the first time stamps published_at. The slug is never
+    // touched — changing a live URL throws away its search ranking.
+    if (status === 'active') patch.published_at = new Date().toISOString()
+    const { error: e } = await supabase.from('products').update(patch).eq('id', id)
+    error = e?.message ?? ''
+    if (!e) notice = 'Saved.'
+  }
+}
+
+const { data: p } = await supabase.from('products').select('*').eq('id', id).single()
+if (!p) return Astro.redirect('/admin/products', 302)
+
+const [{ data: cats }, { data: stockRow }, { data: lines }, { data: sales }, { data: photos }] =
+  await Promise.all([
+  supabase.from('categories').select('id, name, parent_id').order('sort_order'),
+  supabase.from('product_stock').select('*').eq('product_id', id).single(),
+  supabase
+    .from('stock_lines')
+    .select('id, qty_received, unit_cost_cents, condition_raw, lots(lot_code)')
+    .eq('product_id', id),
+  supabase
+    .from('sales')
+    .select('id, qty, sale_price_cents, list_price_cents, sold_at, note')
+    .eq('product_id', id)
+    .order('sold_at', { ascending: false }),
+  supabase
+    .from('product_photos')
+    .select('id, r2_key, alt_text')
+    .eq('product_id', id)
+    .order('sort_order'),
+])
+
+const parentName = new Map((cats ?? []).filter((c) => !c.parent_id).map((c) => [c.id, c.name]))
+const subCats = (cats ?? []).filter((c) => c.parent_id)
+const stock = stockRow ?? { qty_received: 0, qty_sold: 0, qty_available: 0 }
+const unitCost = (lines ?? [])[0]?.unit_cost_cents ?? null
+const margin = unitCost && p.price_cents ? p.price_cents - unitCost : null
+const dollars = (c: number | null) => (c ? (c / 100).toFixed(2) : '')
+const field =
+  'mt-1 w-full rounded-lg border border-ink-100 bg-white px-3 py-2 text-base outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20'
+---
+
+<Admin title={p.name} subtitle={[p.brand, p.model].filter(Boolean).join(' · ') || undefined}>
+  {notice && <p class="mb-5 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</p>}
+  {error && <p class="mb-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+
+  <div class="grid gap-6 lg:grid-cols-[1fr_minmax(0,20rem)]">
+    <form method="POST" class="space-y-4 rounded-xl border border-ink-100 bg-white p-5">
+      <label class="block">
+        <span class="text-sm font-medium">Name shown to customers</span>
+        <input name="name" value={p.name} required class={field} />
+      </label>
+
+      <div class="grid gap-4 sm:grid-cols-2">
+        <label class="block"><span class="text-sm font-medium">Brand</span>
+          <input name="brand" value={p.brand ?? ''} class={field} /></label>
+        <label class="block"><span class="text-sm font-medium">Model</span>
+          <input name="model" value={p.model ?? ''} class={field} /></label>
+      </div>
+
+      <label class="block">
+        <span class="text-sm font-medium">Description</span>
+        <textarea name="description" rows="4" class={field}>{p.description ?? ''}</textarea>
+      </label>
+
+      <div class="grid gap-4 sm:grid-cols-2">
+        <label class="block"><span class="text-sm font-medium">Category</span>
+          <select name="category_id" class={field}>
+            <option value="">— none —</option>
+            {subCats.map((c) => (
+              <option value={c.id} selected={c.id === p.category_id}>
+                {parentName.get(c.parent_id)} → {c.name}
+              </option>
+            ))}
+          </select></label>
+        <label class="block"><span class="text-sm font-medium">Condition <span class="font-normal text-brand-600">(shown to customers)</span></span>
+          <select name="condition" class={field}>
+            {CONDITIONS.map((c) => (
+              <option value={c} selected={c === p.condition}>{conditionLabel(c)}</option>
+            ))}
+          </select>
+          <span class="mt-1 block text-xs text-ink-500">{conditionNote(p.condition)}</span>
+          <span class="mt-1 block text-xs text-ink-300">
+            The manifest only ever says &ldquo;used&rdquo;. Correct it here once you have seen the unit.
+          </span></label>
+      </div>
+
+      <div class="grid gap-4 sm:grid-cols-2">
+        <label class="block"><span class="text-sm font-medium">Your price</span>
+          <div class="mt-1 flex items-center rounded-lg border border-ink-100 focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500/20">
+            <span class="pl-3 text-ink-300">$</span>
+            <input name="price" value={dollars(p.price_cents)} inputmode="decimal"
+              class="w-full bg-transparent px-2 py-2 text-base tabular-nums outline-none" />
+          </div></label>
+        <label class="block"><span class="text-sm font-medium">Status</span>
+          <select name="status" class={field}>
+            {['draft', 'active', 'sold', 'hidden'].map((s) => (
+              <option value={s} selected={s === p.status}>{s}</option>
+            ))}
+          </select></label>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3 border-t border-ink-100 pt-4">
+        <button type="submit" name="intent" value="save"
+          class="rounded-lg bg-brand-600 px-5 py-2.5 font-medium text-white transition hover:bg-brand-700">
+          Save changes
+        </button>
+        <a href="/admin/products" class="text-sm text-ink-500 hover:underline">Back to products</a>
+        <ConfirmAction intent="delete" label="Delete"
+          title="Delete this product?"
+          message={`"${p.name}" comes off the site. Its sales history is kept and you can restore it from the Deleted tab.`}
+          confirmLabel="Delete" tone="danger"
+          class="ml-auto text-sm text-red-600 hover:underline" />
+      </div>
+    </form>
+
+    <div class="space-y-4">
+      <div class="rounded-xl border border-ink-100 bg-white p-5">
+        <h2 class="font-semibold">Money <span class="text-xs font-normal text-ink-300">private</span></h2>
+        <dl class="mt-3 space-y-2 text-sm">
+          {[
+            ['MSRP', formatCents(p.msrp_cents)],
+            ['Your cost', unitCost ? formatCents(unitCost) : 'lot cost not entered'],
+            ['Your price', formatCents(p.price_cents)],
+            ['Margin per unit', margin === null ? '—' : formatCents(margin)],
+          ].map(([k, v]) => (
+            <div class="flex justify-between gap-4">
+              <dt class="text-ink-500">{k}</dt><dd class="tabular-nums font-medium">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+
+      <div class="rounded-xl border border-ink-100 bg-white p-5">
+        <h2 class="font-semibold">Stock</h2>
+        <p class="mt-2 text-3xl font-semibold tabular-nums">{stock.qty_available}</p>
+        <p class="text-xs text-ink-500">{stock.qty_received} received · {stock.qty_sold} sold</p>
+        {(lines ?? []).length > 0 && (
+          <ul class="mt-3 space-y-1 border-t border-ink-100 pt-3 text-xs text-ink-500">
+            {(lines ?? []).map((l) => (
+              <li>{l.qty_received} from lot {(l.lots as any)?.lot_code ?? '—'}
+                {l.condition_raw ? ` · ${l.condition_raw}` : ''}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {stock.qty_available > 0 && (
+        <form method="POST" class="rounded-xl border border-ink-100 bg-white p-5">
+          <h2 class="font-semibold">Record a sale</h2>
+          <p class="mt-1 text-xs text-ink-500">
+            Asking {p.price_cents ? formatCents(p.price_cents) : '—'}. Change the price below if you
+            settled on something else — both numbers are kept.
+          </p>
+          <div class="mt-3 grid grid-cols-2 gap-3">
+            <label class="block"><span class="text-xs text-ink-500">Quantity</span>
+              <input name="sell_qty" type="number" min="1" max={stock.qty_available} value="1" class={field} /></label>
+            <label class="block"><span class="text-xs text-ink-500">Sold for (each)</span>
+              <input id="sell_price" name="sell_price" inputmode="decimal" value={dollars(p.price_cents)} class={field} /></label>
+          </div>
+          <p id="discount" class="mt-2 text-xs text-ink-500" data-list={p.price_cents ?? 0}></p>
+          <label class="mt-3 block"><span class="text-xs text-ink-500">Note <span class="text-ink-300">(optional)</span></span>
+            <input name="sell_note" placeholder="Haggled, paid cash, delivery included…" class={field} /></label>
+          <button type="submit" name="intent" value="sell"
+            class="mt-3 w-full rounded-lg bg-ink-900 px-4 py-2.5 font-medium text-white transition hover:bg-ink-700">
+            Mark sold
+          </button>
+        </form>
+      )}
+
+      {(sales ?? []).length > 0 && (
+        <div class="rounded-xl border border-ink-100 bg-white p-5">
+          <h2 class="font-semibold">Sales</h2>
+          <ul class="mt-3 space-y-2 text-sm">
+            {(sales ?? []).map((s) => (
+              <li>
+                <div class="flex justify-between gap-3">
+                  <span class="text-ink-500">{new Date(s.sold_at).toLocaleDateString()}</span>
+                  <span class="tabular-nums font-medium">{s.qty} × {formatCents(s.sale_price_cents)}</span>
+                </div>
+                {s.list_price_cents != null && s.list_price_cents !== s.sale_price_cents && (
+                  <div class="text-xs text-ink-500">
+                    asked {formatCents(s.list_price_cents)} ·{' '}
+                    <span class={s.list_price_cents > s.sale_price_cents ? 'text-amber-700' : 'text-emerald-700'}>
+                      {s.list_price_cents > s.sale_price_cents ? '−' : '+'}
+                      {formatCents(Math.abs(s.list_price_cents - s.sale_price_cents))} each
+                    </span>
+                  </div>
+                )}
+                {s.note && <div class="text-xs text-ink-300">{s.note}</div>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div class="rounded-xl border border-ink-100 bg-white p-5">
+        <div class="flex items-baseline justify-between gap-3">
+          <h2 class="font-semibold text-ink-900">Photos</h2>
+          <span class="text-xs text-ink-300">First one is the main image</span>
+        </div>
+        <p class="mt-1 mb-3 text-xs text-ink-500">
+          Shot on a phone is fine — they're resized here before uploading, so a slow
+          connection is not a problem.
+        </p>
+        <PhotoUploader productId={p.id} photos={photos ?? []} />
+      </div>
+    </div>
+  </div>
+
+<script is:inline>
+  // Shows the gap between the asking price and what you are about to enter,
+  // so a negotiated price is a deliberate act rather than a typo.
+  ;(() => {
+    const input = document.getElementById('sell_price')
+    const out = document.getElementById('discount')
+    if (!input || !out) return
+    const list = Number(out.dataset.list || 0)
+    const money = (c) => '$' + (c / 100).toFixed(2)
+    const render = () => {
+      const got = Math.round(Number.parseFloat(input.value.replace(/[^0-9.]/g, '')) * 100)
+      if (!list || !Number.isFinite(got) || got === list) { out.textContent = ''; return }
+      const diff = list - got
+      out.textContent = diff > 0
+        ? `${money(diff)} below asking (${Math.round((diff / list) * 100)}% off)`
+        : `${money(-diff)} above asking`
+      out.className = 'mt-2 text-xs ' + (diff > 0 ? 'text-amber-700' : 'text-emerald-700')
+    }
+    input.addEventListener('input', render)
+    render()
+  })()
+</script>
+</Admin>

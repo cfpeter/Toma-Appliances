@@ -1,0 +1,234 @@
+---
+import ConfirmAction from '../../../components/admin/ConfirmAction.astro'
+import Stepper from '../../../components/admin/Stepper.astro'
+import Admin from '../../../layouts/Admin.astro'
+import { stageManifest } from '../../../lib/import/stage.ts'
+import { formatCents } from '../../../lib/money.ts'
+
+const supabase = Astro.locals.supabase!
+let notice = ''
+let error = ''
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const intent = String(form.get('intent') ?? '')
+
+  if (intent === 'upload') {
+    const file = form.get('file')
+    if (!(file instanceof File) || file.size === 0) {
+      error = 'Choose a CSV file first.'
+    } else if (file.size > 5_000_000) {
+      error =
+        'That file is over 5 MB — manifests are normally a few hundred KB. Is it the right file?'
+    } else {
+      try {
+        const r = await stageManifest(supabase, await file.text(), file.name)
+        // Step 2 is the cost question. Asking it here — while the auction
+        // invoice is still in front of you — is why it stops being forgotten.
+        return Astro.redirect(`/admin/lots/${r.lotId}?step=2&import=${r.importId}`, 303)
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e)
+      }
+    }
+  }
+
+  if (intent === 'delete') {
+    const id = String(form.get('id') ?? '')
+    const { data: imp } = await supabase
+      .from('imports')
+      .select('status, lot_id')
+      .eq('id', id)
+      .single()
+
+    if (imp?.status === 'committed') {
+      error =
+        'That import is committed. Undo it first — deleting it now would orphan the products it created.'
+    } else {
+      // import_rows cascade with the import.
+      await supabase.from('imports').delete().eq('id', id)
+      // Drop the lot too if nothing else references it.
+      if (imp?.lot_id) {
+        const [{ count: otherImports }, { count: stockLines }] = await Promise.all([
+          supabase
+            .from('imports')
+            .select('*', { count: 'exact', head: true })
+            .eq('lot_id', imp.lot_id),
+          supabase
+            .from('stock_lines')
+            .select('*', { count: 'exact', head: true })
+            .eq('lot_id', imp.lot_id),
+        ])
+        if ((otherImports ?? 0) === 0 && (stockLines ?? 0) === 0) {
+          await supabase.from('lots').delete().eq('id', imp.lot_id)
+        }
+      }
+      notice = 'Import deleted.'
+    }
+  }
+
+  if (intent === 'revert') {
+    const id = String(form.get('id') ?? '')
+    const { data, error: e } = await supabase.rpc('revert_import', { p_import_id: id })
+    if (e) error = e.message
+    else {
+      const r = data as {
+        stock_lines_removed: number
+        products_removed: number
+        products_kept_because_sold: number
+      }
+      notice =
+        `Undone — ${r.products_removed} product${r.products_removed === 1 ? '' : 's'} removed, ` +
+        `back to pending for review.` +
+        (r.products_kept_because_sold > 0
+          ? ` ${r.products_kept_because_sold} kept because ${r.products_kept_because_sold === 1 ? 'it has' : 'they have'} sales.`
+          : '')
+    }
+  }
+}
+
+const { data: imports } = await supabase
+  .from('imports')
+  .select('id, filename, row_count, status, imported_at, lots(lot_code, vendor)')
+  .order('imported_at', { ascending: false })
+
+const ids = (imports ?? []).map((i) => i.id)
+const { data: rows } = ids.length
+  ? await supabase
+      .from('import_rows')
+      .select('import_id, qty, unit_retail_cents, flags')
+      .in('import_id', ids)
+  : { data: [] }
+
+const stats = new Map<string, { units: number; retail: number; flagged: number }>()
+for (const r of rows ?? []) {
+  const s = stats.get(r.import_id) ?? { units: 0, retail: 0, flagged: 0 }
+  s.units += r.qty ?? 0
+  s.retail += (r.qty ?? 0) * (r.unit_retail_cents ?? 0)
+  if ((r.flags as unknown[])?.length) s.flagged++
+  stats.set(r.import_id, s)
+}
+---
+
+<Admin title="Imports" subtitle="Upload a B-Stock manifest. Nothing is published until you review and commit it.">
+  <Stepper current={1} />
+  {notice && <p class="mb-5 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</p>}
+  {error && <p class="mb-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+
+  <form method="POST" enctype="multipart/form-data"
+    class="mb-6 rounded-xl border border-dashed border-brand-500/40 bg-brand-500/[0.03] p-5">
+    <input type="hidden" name="intent" value="upload" />
+    <div class="flex flex-wrap items-end gap-4">
+      <label class="min-w-0 flex-1">
+        <span class="text-sm font-medium">Manifest CSV</span>
+        <input type="file" name="file" id="manifest" accept=".csv,text/csv" required
+          class="mt-1 block w-full text-sm text-ink-500 file:mr-3 file:rounded-lg file:border-0 file:bg-ink-100 file:px-4 file:py-2 file:text-sm file:font-medium file:text-ink-700 hover:file:bg-ink-300/50" />
+      </label>
+      <button type="submit" id="upload" disabled
+        class="rounded-lg bg-brand-600 px-5 py-2.5 font-medium text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-ink-100 disabled:text-ink-300 disabled:hover:bg-ink-100">
+        Upload &amp; stage
+      </button>
+    </div>
+    <p class="mt-3 text-xs text-ink-500" id="uploadhint">
+      Choose the B-Stock download, unchanged. Re-uploading the same lot replaces its
+      pending staging — committed imports are never touched.
+    </p>
+  </form>
+
+  <script is:inline>
+    (() => {
+      const input = document.getElementById('manifest')
+      const button = document.getElementById('upload')
+      const hint = document.getElementById('uploadhint')
+      if (!input || !button) return
+
+      const defaultHint = hint.textContent
+
+      input.addEventListener('change', () => {
+        const file = input.files?.[0]
+        button.disabled = !file
+        if (!file) {
+          hint.textContent = defaultHint
+          return
+        }
+        const kb = Math.max(1, Math.round(file.size / 1024))
+        const looksRight = /\.csv$/i.test(file.name)
+        hint.textContent = looksRight
+          ? `Ready: ${file.name} (${kb} KB)`
+          : `${file.name} isn't a .csv — B-Stock manifests download as CSV.`
+        hint.className = looksRight
+          ? 'mt-3 text-xs font-medium text-brand-700'
+          : 'mt-3 text-xs font-medium text-amber-700'
+      })
+    })()
+  </script>
+
+  {(imports ?? []).length === 0 ? (
+    <p class="rounded-xl border border-dashed border-ink-100 bg-white p-10 text-center text-sm text-ink-500">
+      No manifests uploaded yet.
+    </p>
+  ) : (
+    <div class="overflow-x-auto rounded-xl border border-ink-100 bg-white">
+      <table class="w-full text-sm">
+        <thead class="border-b border-ink-100 text-left text-xs tracking-wide text-ink-500 uppercase">
+          <tr>
+            <th class="px-4 py-3 font-medium">Lot</th>
+            <th class="px-4 py-3 font-medium">File</th>
+            <th class="px-4 py-3 text-right font-medium">Lines</th>
+            <th class="px-4 py-3 text-right font-medium">Units</th>
+            <th class="px-4 py-3 text-right font-medium">Retail</th>
+            <th class="px-4 py-3 text-right font-medium">Flagged</th>
+            <th class="px-4 py-3 font-medium">Status</th>
+            <th class="px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-ink-100">
+          {(imports ?? []).map((imp) => {
+            const s = stats.get(imp.id) ?? { units: 0, retail: 0, flagged: 0 }
+            const committed = imp.status === 'committed'
+            return (
+              <tr class="hover:bg-ink-50/60">
+                <td class="px-4 py-3 font-medium">{(imp.lots as any)?.lot_code ?? '—'}</td>
+                <td class="max-w-[18rem] truncate px-4 py-3 text-ink-500">{imp.filename}</td>
+                <td class="px-4 py-3 text-right tabular-nums">{imp.row_count}</td>
+                <td class="px-4 py-3 text-right tabular-nums">{s.units}</td>
+                <td class="px-4 py-3 text-right tabular-nums">{formatCents(s.retail)}</td>
+                <td class="px-4 py-3 text-right tabular-nums">
+                  {s.flagged > 0
+                    ? <span class="rounded-md bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">{s.flagged}</span>
+                    : <span class="text-ink-300">0</span>}
+                </td>
+                <td class="px-4 py-3">
+                  <span class:list={['rounded-md px-2 py-0.5 text-xs font-medium',
+                    committed ? 'bg-emerald-100 text-emerald-800' : 'bg-brand-500/10 text-brand-700']}>
+                    {imp.status}
+                  </span>
+                </td>
+                <td class="px-4 py-3 text-right whitespace-nowrap">
+                  <a href={`/admin/import/${imp.id}`} class="font-medium text-brand-600 hover:underline">
+                    {committed ? 'View' : 'Review'} →
+                  </a>
+                  <form method="POST" class="ml-3 inline">
+                    <input type="hidden" name="id" value={imp.id} />
+                    {committed ? (
+                      <ConfirmAction intent="revert" label="Undo"
+                        title="Undo this import?"
+                        message="The products it created are removed and it goes back to pending for review. Anything you've already sold is kept, along with its sales history."
+                        confirmLabel="Undo import" tone="warn"
+                        class="text-sm text-amber-700 hover:underline" />
+                    ) : (
+                      <ConfirmAction intent="delete" label="Delete"
+                        title="Delete this staged import?"
+                        message="Nothing from it was published, so no products or stock are affected. You can upload the file again anytime."
+                        confirmLabel="Delete" tone="danger"
+                        class="text-sm text-red-600 hover:underline" />
+                    )}
+                  </form>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )}
+</Admin>

@@ -1,0 +1,139 @@
+---
+import ConfirmAction from '../../../components/admin/ConfirmAction.astro'
+import Admin from '../../../layouts/Admin.astro'
+import { formatCents } from '../../../lib/money.ts'
+
+const supabase = Astro.locals.supabase!
+let notice = ''
+let error = ''
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const lotId = String(form.get('lot_id') ?? '')
+  if (lotId && form.get('intent') === 'delete') {
+    const { data, error: e } = await supabase.rpc('delete_lot', { p_lot_id: lotId })
+    if (e) error = e.message
+    else {
+      const r = data as { lot_code: string; units_removed: number; products_removed: number }
+      notice = `Lot ${r.lot_code} deleted — ${r.units_removed} units and ${r.products_removed} products removed.`
+    }
+  }
+}
+
+const showArchived = Astro.url.searchParams.get('archived') === '1'
+
+const { data: lots } = await supabase
+  .from('lots')
+  .select(
+    'id, lot_code, vendor, purchase_date, bid_cents, service_fee_cents, freight_cents, landed_cost_cents, costs_allocated_at, archived_at',
+  )
+  .order('purchase_date', { ascending: false })
+  .then((r) => ({
+    ...r,
+    data: (r.data ?? []).filter((l: any) => (showArchived ? l.archived_at : !l.archived_at)),
+  }))
+
+const [{ data: imports }, { data: rows }, { data: lines }] = await Promise.all([
+  supabase.from('imports').select('id, lot_id'),
+  supabase.from('import_rows').select('import_id, qty, unit_retail_cents'),
+  supabase.from('stock_lines').select('lot_id, qty_received, msrp_cents'),
+])
+
+// Real stock first. Staged rows are only a preview, and an import record can be
+// removed after committing — counting those alone showed full lots as empty.
+const staged = new Map<string, { units: number; retail: number }>()
+for (const l of lines ?? []) {
+  if (!l.lot_id) continue
+  const s = staged.get(l.lot_id) ?? { units: 0, retail: 0 }
+  s.units += l.qty_received ?? 0
+  s.retail += (l.qty_received ?? 0) * (l.msrp_cents ?? 0)
+  staged.set(l.lot_id, s)
+}
+
+// Fall back to staged rows only for lots with no committed stock yet.
+const lotOfImport = new Map((imports ?? []).map((i) => [i.id, i.lot_id]))
+for (const r of rows ?? []) {
+  const lotId = lotOfImport.get(r.import_id)
+  if (!lotId || (lines ?? []).some((l) => l.lot_id === lotId)) continue
+  const s = staged.get(lotId) ?? { units: 0, retail: 0 }
+  s.units += r.qty ?? 0
+  s.retail += (r.qty ?? 0) * (r.unit_retail_cents ?? 0)
+  staged.set(lotId, s)
+}
+---
+
+<Admin title="Lots" subtitle="Every auction purchase. Enter what you paid so cost per unit can be worked out.">
+  {notice && <p class="mb-5 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</p>}
+  {error && <p class="mb-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+
+  {Astro.url.searchParams.get('deleted') && (
+    <p class="mb-5 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+      Lot {Astro.url.searchParams.get('deleted')} deleted —
+      {' '}{Astro.url.searchParams.get('units')} units and
+      {' '}{Astro.url.searchParams.get('products')} products removed.
+    </p>
+  )}
+
+  <p class="mb-4">
+    <a href={showArchived ? '/admin/lots' : '/admin/lots?archived=1'}
+      class="text-sm font-medium text-brand-600 hover:underline">
+      {showArchived ? '← Back to active lots' : 'View archived lots'}
+    </a>
+  </p>
+  {(lots ?? []).length === 0 ? (
+    <p class="rounded-xl border border-dashed border-ink-100 bg-white p-10 text-center text-sm text-ink-500">
+      No lots yet. Importing a manifest creates one.
+    </p>
+  ) : (
+    <div class="overflow-x-auto rounded-xl border border-ink-100 bg-white">
+      <table class="w-full text-sm">
+        <thead class="border-b border-ink-100 text-left text-xs tracking-wide text-ink-500 uppercase">
+          <tr>
+            <th class="px-4 py-3 font-medium">Lot</th>
+            <th class="px-4 py-3 font-medium">Vendor</th>
+            <th class="px-4 py-3 text-right font-medium">Units</th>
+            <th class="px-4 py-3 text-right font-medium">Retail</th>
+            <th class="px-4 py-3 text-right font-medium">You paid</th>
+            <th class="px-4 py-3 font-medium">Cost basis</th>
+            <th class="px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-ink-100">
+          {(lots ?? []).map((l) => {
+            const s = staged.get(l.id) ?? { units: 0, retail: 0 }
+            const hasCost = (l.landed_cost_cents ?? 0) > 0
+            return (
+              <tr class="hover:bg-ink-50/60">
+                <td class="px-4 py-3 font-medium">{l.lot_code}</td>
+                <td class="max-w-[16rem] truncate px-4 py-3 text-ink-500">{l.vendor ?? '—'}</td>
+                <td class="px-4 py-3 text-right tabular-nums">{s.units}</td>
+                <td class="px-4 py-3 text-right tabular-nums text-ink-500">{formatCents(s.retail)}</td>
+                <td class="px-4 py-3 text-right tabular-nums font-medium">
+                  {hasCost ? formatCents(l.landed_cost_cents) : <span class="text-ink-300">—</span>}
+                </td>
+                <td class="px-4 py-3">
+                  {l.costs_allocated_at
+                    ? <span class="rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">allocated</span>
+                    : hasCost
+                      ? <span class="rounded-md bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">cost entered</span>
+                      : <span class="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">no cost yet</span>}
+                </td>
+                <td class="px-4 py-3 text-right whitespace-nowrap">
+                  <a href={`/admin/lots/${l.id}`} class="font-medium text-brand-600 hover:underline">Open →</a>
+                  <form method="POST" class="ml-3 inline">
+                    <input type="hidden" name="lot_id" value={l.id} />
+                    <ConfirmAction intent="delete" label="Delete"
+                      title={`Delete lot ${l.lot_code}?`}
+                      message={`Removes this lot, its manifest, its ${s.units} unit${s.units === 1 ? '' : 's'}, and any product left with nothing in it. Products that also hold stock from another truckload are kept. This cannot be undone.`}
+                      confirmLabel="Delete lot" tone="danger"
+                      class="text-sm text-red-600 hover:underline" />
+                  </form>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )}
+</Admin>

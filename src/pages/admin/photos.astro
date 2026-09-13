@@ -1,0 +1,153 @@
+---
+/**
+ * Photographing a truckload, on a phone.
+ *
+ * Deliberately not part of the four-step import flow. Pricing is a laptop job
+ * -- a wide table of MSRP against your price -- while this is done standing in
+ * front of the appliance with a phone in one hand. Same data, different room.
+ *
+ * Products with no photo sort first, so the list drains as the work gets done
+ * and the thing left at the top is always the next thing to shoot.
+ */
+import PhotoUploader from '../../components/admin/PhotoUploader.astro'
+import Admin from '../../layouts/Admin.astro'
+import { conditionBadgeClass, conditionLabel } from '../../lib/condition.ts'
+
+const supabase = Astro.locals.supabase!
+const lotFilter = Astro.url.searchParams.get('lot')
+const productFilter = Astro.url.searchParams.get('product')
+
+let ids: string[] | null = null
+if (lotFilter) {
+  const { data } = await supabase.from('stock_lines').select('product_id').eq('lot_id', lotFilter)
+  ids = [...new Set((data ?? []).map((r) => r.product_id))]
+} else if (productFilter) {
+  ids = [productFilter]
+}
+
+let q = supabase
+  .from('products')
+  .select('id, name, brand, model, condition, status')
+  .neq('status', 'deleted')
+  .order('name')
+  .limit(300)
+if (ids) q = q.in('id', ids.length ? ids : ['none'])
+
+const [{ data: products }, { data: photoRows }, { data: lots }] = await Promise.all([
+  q,
+  supabase.from('product_photos').select('id, product_id, r2_key, alt_text').order('sort_order'),
+  supabase.from('lots').select('id, lot_code').is('archived_at', null).order('lot_code'),
+])
+
+const byProduct = new Map<string, { id: string; r2_key: string; alt_text: string | null }[]>()
+for (const r of photoRows ?? []) {
+  const list = byProduct.get(r.product_id) ?? []
+  list.push(r)
+  byProduct.set(r.product_id, list)
+}
+
+const all = products ?? []
+// Unphotographed first; otherwise alphabetical, so the list is stable as you work.
+const ordered = [...all].sort((a, b) => {
+  const na = byProduct.get(a.id)?.length ?? 0
+  const nb = byProduct.get(b.id)?.length ?? 0
+  if ((na === 0) !== (nb === 0)) return na === 0 ? -1 : 1
+  return a.name.localeCompare(b.name)
+})
+const withPhotos = all.filter((p) => byProduct.get(p.id)?.length).length
+const pct = all.length ? Math.round((withPhotos / all.length) * 100) : 0
+const lotCode = lots?.find((l) => l.id === lotFilter)?.lot_code
+---
+
+<Admin
+  title="Photos"
+  subtitle={lotCode ? `Lot ${lotCode} — walk the truckload.` : 'Add pictures to your listings.'}
+>
+  {all.length > 0 && (
+    <div class="sticky top-0 z-10 -mx-4 mb-5 border-b border-ink-100 bg-ink-50/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+      <div class="flex items-center justify-between gap-3 text-sm">
+        <span class="font-medium">
+          {withPhotos} of {all.length} photographed
+        </span>
+        <span class="tabular-nums text-ink-500">{pct}%</span>
+      </div>
+      <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-ink-100">
+        <div class="h-full rounded-full bg-brand-500 transition-all" style={`width:${pct}%`} data-bar></div>
+      </div>
+    </div>
+  )}
+
+  {(lots ?? []).length > 1 && !productFilter && (
+    <div class="mb-5 flex flex-wrap items-center gap-2 text-sm">
+      <a href="/admin/photos"
+        class:list={['rounded-lg px-3 py-1.5 font-medium transition',
+          lotFilter ? 'text-ink-500 hover:bg-ink-100' : 'bg-brand-500/10 text-brand-700']}>Everything</a>
+      {(lots ?? []).map((l) => (
+        <a href={`/admin/photos?lot=${l.id}`}
+          class:list={['rounded-lg px-3 py-1.5 font-medium transition',
+            l.id === lotFilter ? 'bg-brand-500/10 text-brand-700' : 'text-ink-500 hover:bg-ink-100']}>{l.lot_code}</a>
+      ))}
+    </div>
+  )}
+
+  {all.length === 0 ? (
+    <div class="rounded-xl border border-dashed border-ink-100 bg-white p-10 text-center">
+      <p class="font-medium text-ink-900">Nothing to photograph yet.</p>
+      <p class="mt-1 text-sm text-ink-500">Import a manifest and commit it first.</p>
+      <a href="/admin/import" class="mt-4 inline-block rounded-lg bg-ink-900 px-4 py-2 text-sm font-medium text-white hover:bg-ink-700">Go to imports</a>
+    </div>
+  ) : (
+    <div class="space-y-4">
+      {ordered.map((p) => {
+        const shots = byProduct.get(p.id) ?? []
+        return (
+          <section
+            class:list={['rounded-xl border bg-white p-4',
+              shots.length ? 'border-ink-100' : 'border-amber-200']}
+            data-card
+            data-has={shots.length ? '1' : '0'}
+          >
+            <div class="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <div class="min-w-0">
+                <a href={`/admin/products/${p.id}`} class="font-medium hover:text-brand-600 hover:underline">{p.name}</a>
+                <div class="text-xs text-ink-300">{[p.brand, p.model].filter(Boolean).join(' · ')}</div>
+              </div>
+              <div class="flex shrink-0 items-center gap-2">
+                <span class:list={['rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset',
+                  conditionBadgeClass(p.condition)]}>{conditionLabel(p.condition)}</span>
+                {shots.length === 0 && (
+                  <span class="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">no photo</span>
+                )}
+              </div>
+            </div>
+            <PhotoUploader productId={p.id} photos={shots} compact />
+          </section>
+        )
+      })}
+    </div>
+  )}
+</Admin>
+
+<script>
+  // The counter is the whole point of the screen, so it updates as photos land
+  // rather than waiting for a reload the user has no reason to perform.
+  document.addEventListener('photos:changed', () => {
+    const cards = [...document.querySelectorAll<HTMLElement>('[data-card]')]
+    let done = 0
+    for (const card of cards) {
+      const has = (card.querySelector<HTMLElement>('.photo-uploader')?.dataset.count ?? '0') !== '0'
+      card.dataset.has = has ? '1' : '0'
+      card.classList.toggle('border-amber-200', !has)
+      card.classList.toggle('border-ink-100', has)
+      card.querySelector('.bg-amber-100')?.classList.toggle('hidden', has)
+      if (has) done++
+    }
+    const pct = cards.length ? Math.round((done / cards.length) * 100) : 0
+    const bar = document.querySelector<HTMLElement>('[data-bar]')
+    if (bar) bar.style.width = `${pct}%`
+    const label = bar?.parentElement?.previousElementSibling?.firstElementChild
+    if (label) label.textContent = `${done} of ${cards.length} photographed`
+    const pctLabel = bar?.parentElement?.previousElementSibling?.lastElementChild
+    if (pctLabel) pctLabel.textContent = `${pct}%`
+  })
+</script>

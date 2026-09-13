@@ -1,0 +1,130 @@
+---
+/**
+ * A destructive button that opens a real modal instead of the browser's
+ * native confirm(), which is easy to dismiss by reflex and gives no context.
+ *
+ * The trigger is type="button" so it can never submit by accident. Only the
+ * modal's confirm button submits, and it does so by writing a hidden `intent`
+ * into the surrounding form — so nothing happens unless the choice is explicit.
+ */
+interface Props {
+  intent: string
+  label: string
+  title: string
+  message: string
+  confirmLabel?: string
+  tone?: 'danger' | 'warn'
+  /** Optional hidden field to set before submitting, e.g. which row was clicked. */
+  fieldName?: string
+  fieldValue?: string
+  class?: string
+}
+
+const {
+  intent,
+  label,
+  title,
+  message,
+  confirmLabel = label,
+  tone = 'danger',
+  fieldName,
+  fieldValue,
+  class: className = '',
+} = Astro.props
+
+// Unique per instance so many can live on one page.
+const uid = `ca-${Math.random().toString(36).slice(2, 10)}`
+
+const confirmClasses =
+  tone === 'danger' ? 'bg-red-600 hover:bg-red-700' : 'bg-amber-600 hover:bg-amber-700'
+
+// The dialog carries text-left / whitespace-normal / normal-case as deliberate
+// resets. A <dialog> renders in the browser's top layer but still INHERITS from
+// its DOM parent, and this component often sits inside a table cell styled
+// `text-right whitespace-nowrap` — which made the message refuse to wrap and
+// overflow its own box.
+---
+
+<button type="button" class={className} data-confirm-open={uid}>{label}</button>
+
+<dialog
+  id={uid}
+  data-intent={intent}
+  data-field-name={fieldName}
+  data-field-value={fieldValue}
+  class="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-2xl border border-ink-100 p-0 text-left font-sans text-base normal-case whitespace-normal text-ink-900 shadow-xl backdrop:bg-ink-900/40"
+>
+  <div class="p-6">
+    <h2 class="text-lg font-semibold tracking-tight text-balance">{title}</h2>
+    <p class="mt-2 text-sm break-words text-ink-500">{message}</p>
+    <div class="mt-6 flex justify-end gap-3">
+      <button type="button" data-confirm-cancel
+        class="rounded-lg border border-ink-100 px-4 py-2 text-sm font-medium transition hover:bg-ink-50">
+        Cancel
+      </button>
+      <button type="button" data-confirm-go
+        class={`rounded-lg px-4 py-2 text-sm font-medium text-white transition ${confirmClasses}`}>
+        {confirmLabel}
+      </button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+  // One delegated listener for every ConfirmAction on the page.
+  if (!(window as any).__confirmActionWired) {
+    ;(window as any).__confirmActionWired = true
+
+    document.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement
+
+      const opener = target.closest<HTMLElement>('[data-confirm-open]')
+      if (opener) {
+        const dialog = document.getElementById(opener.dataset.confirmOpen!) as HTMLDialogElement | null
+        if (dialog) {
+          // Remember which form this belongs to — the dialog is moved around
+          // by the browser's top layer, so we cannot rely on closest() later.
+          ;(dialog as any).__form = opener.closest('form')
+          dialog.showModal()
+        }
+        return
+      }
+
+      if (target.closest('[data-confirm-cancel]')) {
+        target.closest('dialog')?.close()
+        return
+      }
+
+      const go = target.closest<HTMLElement>('[data-confirm-go]')
+      if (go) {
+        const dialog = go.closest('dialog') as (HTMLDialogElement & { __form?: HTMLFormElement }) | null
+        const form = dialog?.__form
+        if (!dialog || !form) return
+
+        const add = (name: string, value: string) => {
+          const input = document.createElement('input')
+          input.type = 'hidden'
+          input.name = name
+          input.value = value
+          form.append(input)
+        }
+
+        add('intent', dialog.dataset.intent!)
+        if (dialog.dataset.fieldName) add(dialog.dataset.fieldName, dialog.dataset.fieldValue ?? '')
+
+        // Keep the modal open while the request runs — closing it first would
+        // hide the very spinner that says something is happening.
+        const cancel = dialog.querySelector<HTMLButtonElement>('[data-confirm-cancel]')
+        if (cancel) cancel.disabled = true
+
+        // form.submit() bypasses the 'submit' event, so the busy state has to
+        // be triggered by hand or the page sits silent while the server works.
+        const busy = (window as unknown as { __tomaBusy?: (f: HTMLFormElement, b: HTMLElement) => boolean }).__tomaBusy
+        if (typeof busy === 'function' && busy(form, go) === false) return
+        go.setAttribute('disabled', 'true')
+
+        form.submit()
+      }
+    })
+  }
+</script>

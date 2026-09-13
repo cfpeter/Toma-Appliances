@@ -1,0 +1,259 @@
+---
+import Stepper from '../../../components/admin/Stepper.astro'
+import Admin from '../../../layouts/Admin.astro'
+import { formatCents, toCents } from '../../../lib/money.ts'
+
+const supabase = Astro.locals.supabase!
+let notice = ''
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const publish = form.get('intent') === 'publish'
+  const lotParam = Astro.url.searchParams.get('lot')
+  let saved = 0
+  let published = 0
+  let unpriced = 0
+
+  for (const [key, value] of form.entries()) {
+    if (!key.startsWith('price_')) continue
+    const productId = key.slice(6)
+    const cents = toCents(String(value))
+    const patch: Record<string, unknown> = { price_cents: cents }
+    if (publish) {
+      if (cents && cents > 0) {
+        patch.status = 'active'
+        patch.published_at = new Date().toISOString()
+        published++
+      } else {
+        unpriced++
+      }
+    }
+    await supabase.from('products').update(patch).eq('id', productId)
+    saved++
+  }
+
+  // Every branch redirects. Rendering the result of a POST leaves the browser
+  // holding a form submission, so a refresh silently republishes; it also left
+  // this page listing drafts that are no longer drafts, which read as nothing
+  // having happened.
+  if (publish && published > 0) {
+    // Step 4 is the end of the flow. What was just published has left this
+    // page's list by definition, so hand over to the catalogue instead.
+    const q = new URLSearchParams({ status: 'active', published: String(published) })
+    if (unpriced) q.set('unpriced', String(unpriced))
+    return Astro.redirect(`/admin/products?${q}`, 303)
+  }
+
+  const q = new URLSearchParams()
+  if (lotParam) q.set('lot', lotParam)
+  if (publish) {
+    // Reaching here means nothing was published. Either every row was left
+    // without a price, or there was nothing on the page to begin with — two
+    // different messages, and "0 products still need a price" is neither.
+    if (unpriced) q.set('unpriced', String(unpriced))
+    else q.set('empty', '1')
+  } else {
+    q.set('saved', String(saved))
+  }
+  return Astro.redirect(`/admin/products/pricing?${q}`, 303)
+}
+
+const savedParam = Astro.url.searchParams.get('saved')
+const unpricedParam = Astro.url.searchParams.get('unpriced')
+if (savedParam && savedParam !== '0') {
+  notice = `${savedParam} price${savedParam === '1' ? '' : 's'} saved. Still drafts — publish when you're ready.`
+} else if (unpricedParam) {
+  notice =
+    `Nothing was published: ${unpricedParam} product${unpricedParam === '1' ? ' still needs' : 's still need'} a price above $0.`
+} else if (Astro.url.searchParams.get('empty') || savedParam === '0') {
+  notice = 'Nothing to price here — every product in this lot is already published.'
+}
+
+// Step 4 arrives scoped to the lot just committed, so you price that truckload
+// rather than every draft in the catalogue.
+const lotFilter = Astro.url.searchParams.get('lot')
+
+let productIds: string[] | null = null
+if (lotFilter) {
+  const { data: sl } = await supabase
+    .from('stock_lines')
+    .select('product_id')
+    .eq('lot_id', lotFilter)
+  productIds = [...new Set((sl ?? []).map((x) => x.product_id))]
+}
+
+let productQuery = supabase
+  .from('products')
+  .select('id, name, brand, model, msrp_cents, price_cents, category_id')
+  .eq('status', 'draft')
+  .order('msrp_cents', { ascending: false })
+  .limit(300)
+if (productIds) productQuery = productQuery.in('id', productIds.length ? productIds : ['none'])
+
+const { data: products } = await productQuery
+
+const { data: flowLot } = lotFilter
+  ? await supabase
+      .from('lots')
+      .select('id, lot_code, landed_cost_cents')
+      .eq('id', lotFilter)
+      .single()
+  : { data: null }
+
+const [{ data: cats }, { data: stock }, { data: lines }] = await Promise.all([
+  supabase.from('categories').select('id, name'),
+  supabase.from('product_stock').select('product_id, qty_available'),
+  supabase
+    .from('stock_lines')
+    .select('product_id, unit_cost_cents, lot_id, lots(lot_code, landed_cost_cents)'),
+])
+
+const catName = new Map((cats ?? []).map((c) => [c.id, c.name]))
+const qty = new Map((stock ?? []).map((s) => [s.product_id, s.qty_available]))
+const cost = new Map((lines ?? []).map((l) => [l.product_id, l.unit_cost_cents]))
+// Which lot each product came from, so "enter lot cost" can link straight to it.
+const lotOf = new Map(
+  (lines ?? []).map((l) => [l.product_id, { id: l.lot_id, code: (l.lots as any)?.lot_code }]),
+)
+
+// Lots still missing a cost — every product from them has a blank margin.
+const lotsMissingCost = new Map<string, string>()
+for (const l of lines ?? []) {
+  const lot = l.lots as any
+  // Scoped to one lot, other lots' missing costs are just noise here.
+  if (lotFilter && l.lot_id !== lotFilter) continue
+  if (l.lot_id && lot && (lot.landed_cost_cents ?? 0) === 0)
+    lotsMissingCost.set(l.lot_id, lot.lot_code)
+}
+
+const list = products ?? []
+const dollars = (c: number | null) => (c ? (c / 100).toFixed(2) : '')
+---
+
+<Admin title="Set prices" subtitle="Suggested prices are pre-filled. Change what you disagree with, then publish.">
+  {flowLot && (
+    <Stepper current={4} lotId={flowLot.id}
+      done={(flowLot.landed_cost_cents ?? 0) > 0 ? [1, 2, 3] : [1, 3]} />
+  )}
+
+  {flowLot && Astro.url.searchParams.get('created') && (
+    <p class="mb-5 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+      Lot <strong>{flowLot.lot_code}</strong> committed —
+      {' '}{Astro.url.searchParams.get('created')} products created,
+      {' '}{Astro.url.searchParams.get('matched')} added to existing stock,
+      {' '}{Astro.url.searchParams.get('skipped')} skipped.
+      Price them below, then publish to put them on the site.
+    </p>
+  )}
+
+  {flowLot && (
+    <p class="mb-4 text-sm text-ink-500">
+      Showing only the drafts from lot <strong class="text-ink-900">{flowLot.lot_code}</strong>.
+      <a href="/admin/products/pricing" class="ml-1 text-brand-600 hover:underline">
+        Show every draft instead →
+      </a>
+    </p>
+  )}
+  {notice && <p class="mb-5 rounded-lg bg-brand-500/[0.08] px-4 py-3 text-sm text-brand-700">{notice}</p>}
+
+  {lotsMissingCost.size > 0 && (
+    <div class="mb-5 rounded-xl border border-amber-300 bg-amber-50 p-4">
+      <p class="font-medium text-amber-900">
+        {lotsMissingCost.size === 1 ? 'One lot has' : `${lotsMissingCost.size} lots have`} no cost entered
+      </p>
+      <p class="mt-1 text-sm text-amber-800">
+        The B-Stock manifest lists each item's <strong>MSRP</strong> — the original store price —
+        never what you paid. Your cost is the winning bid on the truckload, which isn't in the
+        file. Until you enter it, the Your cost and Margin columns stay empty and profit reports
+        will treat these as pure profit.
+      </p>
+      <p class="mt-3 flex flex-wrap gap-2">
+        {[...lotsMissingCost].map(([id, code]) => (
+          <a href={`/admin/lots/${id}`}
+            class="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-amber-700">
+            Enter cost for {code} →
+          </a>
+        ))}
+      </p>
+    </div>
+  )}
+
+  {list.length === 0 ? (
+    <p class="rounded-xl border border-dashed border-ink-100 bg-white p-10 text-center text-sm text-ink-500">
+      No drafts waiting. Everything is priced.
+    </p>
+  ) : (
+    <form method="POST">
+      <div class="overflow-x-auto rounded-xl border border-ink-100 bg-white">
+        <table class="w-full text-sm">
+          <thead class="border-b border-ink-100 text-left text-xs tracking-wide text-ink-500 uppercase">
+            <tr>
+              <th class="px-4 py-3 font-medium">Product</th>
+              <th class="px-4 py-3 font-medium">Category</th>
+              <th class="px-4 py-3 text-right font-medium">Qty</th>
+              <th class="px-4 py-3 text-right font-medium">MSRP</th>
+              <th class="px-4 py-3 text-right font-medium">Your cost</th>
+              <th class="px-4 py-3 text-right font-medium">Your price</th>
+              <th class="px-4 py-3 text-right font-medium">Margin</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-ink-100">
+            {list.map((p) => {
+              const unitCost = cost.get(p.id) ?? null
+              const margin = unitCost && p.price_cents ? p.price_cents - unitCost : null
+              return (
+                <tr class="hover:bg-ink-50/60">
+                  <td class="px-4 py-2.5">
+                    <div class="font-medium">{p.name}</div>
+                    <div class="text-xs text-ink-300">{[p.brand, p.model].filter(Boolean).join(' · ')}</div>
+                  </td>
+                  <td class="px-4 py-2.5 text-ink-500">{p.category_id ? catName.get(p.category_id) : '—'}</td>
+                  <td class="px-4 py-2.5 text-right tabular-nums">{qty.get(p.id) ?? 0}</td>
+                  <td class="px-4 py-2.5 text-right tabular-nums text-ink-500">{formatCents(p.msrp_cents)}</td>
+                  <td class="px-4 py-2.5 text-right tabular-nums text-ink-500">
+                    {unitCost ? (
+                      formatCents(unitCost)
+                    ) : lotOf.get(p.id)?.id ? (
+                      <a href={`/admin/lots/${lotOf.get(p.id)!.id}`}
+                        title={`Lot ${lotOf.get(p.id)!.code} — the manifest has MSRP, not what you paid. Enter the truckload cost to fill this in.`}
+                        class="text-xs font-medium whitespace-nowrap text-amber-700 underline decoration-dotted underline-offset-2 hover:text-amber-900">
+                        enter cost →
+                      </a>
+                    ) : (
+                      <span class="text-xs text-ink-300">—</span>
+                    )}
+                  </td>
+                  <td class="px-4 py-2.5 text-right">
+                    <div class="ml-auto flex w-28 items-center rounded-lg border border-ink-100 focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500/20">
+                      <span class="pl-2 text-ink-300">$</span>
+                      <input name={`price_${p.id}`} value={dollars(p.price_cents)} inputmode="decimal"
+                        class="w-full bg-transparent px-1.5 py-1.5 text-right tabular-nums outline-none" />
+                    </div>
+                  </td>
+                  <td class="px-4 py-2.5 text-right tabular-nums">
+                    {margin === null ? <span class="text-ink-300">—</span>
+                      : <span class={margin > 0 ? 'text-emerald-700' : 'text-red-600'}>{formatCents(margin)}</span>}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="sticky bottom-0 mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-ink-100 bg-white/95 p-4 backdrop-blur">
+        <span class="flex-1 text-sm text-ink-500">
+          {list.length} draft{list.length === 1 ? '' : 's'}. Publishing makes them visible to customers.
+        </span>
+        <button type="submit" name="intent" value="save"
+          class="rounded-lg border border-ink-100 px-4 py-2.5 font-medium transition hover:bg-ink-50">
+          Save prices
+        </button>
+        <button type="submit" name="intent" value="publish"
+          class="rounded-lg bg-brand-600 px-5 py-2.5 font-medium text-white transition hover:bg-brand-700">
+          Save &amp; publish
+        </button>
+      </div>
+    </form>
+  )}
+</Admin>

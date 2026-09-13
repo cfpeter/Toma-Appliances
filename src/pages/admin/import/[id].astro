@@ -1,0 +1,259 @@
+---
+import Stepper from '../../../components/admin/Stepper.astro'
+import Admin from '../../../layouts/Admin.astro'
+import { formatCents } from '../../../lib/money.ts'
+
+const supabase = Astro.locals.supabase!
+const { id } = Astro.params
+
+// Action changes and the commit both post back to this page.
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+
+  if (form.get('intent') === 'commit') {
+    const { data, error } = await supabase.rpc('commit_import', { p_import_id: id })
+    if (error)
+      return Astro.redirect(`/admin/import/${id}?error=${encodeURIComponent(error.message)}`, 303)
+    const r = data as { created: number; matched: number; skipped: number }
+    // Step 4: price the products this lot just created, not the whole catalog.
+    const { data: committed } = await supabase
+      .from('imports')
+      .select('lot_id')
+      .eq('id', id)
+      .single()
+    return Astro.redirect(
+      `/admin/products/pricing?lot=${committed?.lot_id ?? ''}&created=${r.created}&matched=${r.matched}&skipped=${r.skipped}`,
+      303,
+    )
+  }
+
+  const rowId = String(form.get('row_id') ?? '')
+  const action = String(form.get('action') ?? '')
+  if (rowId && ['new', 'match', 'skip'].includes(action)) {
+    await supabase.from('import_rows').update({ action }).eq('id', rowId)
+  }
+  return Astro.redirect(`/admin/import/${id}`, 303)
+}
+
+const errorMsg = Astro.url.searchParams.get('error')
+
+const { data: imp } = await supabase
+  .from('imports')
+  .select(
+    'id, filename, row_count, status, imported_at, lots(id, lot_code, vendor, landed_cost_cents)',
+  )
+  .eq('id', id)
+  .single()
+
+if (!imp) return Astro.redirect('/admin/import', 302)
+
+const lot = imp.lots as {
+  id: string
+  lot_code: string
+  vendor: string | null
+  landed_cost_cents: number
+} | null
+
+const [{ data: rows }, { data: cats }, { data: priorStock }] = await Promise.all([
+  supabase.from('import_rows').select('*').eq('import_id', id).order('row_number'),
+  supabase.from('categories').select('id, name, parent_id'),
+  // Stock this lot already holds from an EARLIER commit. Re-uploading the same
+  // manifest and committing again silently doubles every quantity, because
+  // matched rows add stock rather than replacing it.
+  lot?.id
+    ? supabase.from('stock_lines').select('qty_received, import_id').eq('lot_id', lot.id)
+    : Promise.resolve({ data: [] as { qty_received: number; import_id: string | null }[] }),
+])
+
+const alreadyCommitted = (priorStock ?? []).filter((l) => l.import_id !== id)
+const alreadyUnits = alreadyCommitted.reduce((n, l) => n + (l.qty_received ?? 0), 0)
+
+const catName = new Map((cats ?? []).map((c) => [c.id, c.name]))
+const list = rows ?? []
+
+const units = list.reduce((s, r) => s + (r.qty ?? 0), 0)
+const retail = list.reduce((s, r) => s + (r.qty ?? 0) * (r.unit_retail_cents ?? 0), 0)
+const counts = { new: 0, match: 0, skip: 0 } as Record<string, number>
+for (const r of list) counts[r.action] = (counts[r.action] ?? 0) + 1
+const flagged = list.filter((r) => (r.flags as unknown[])?.length > 0)
+
+const FLAG_LABELS: Record<string, string> = {
+  no_model: 'no model number',
+  no_brand: 'no brand',
+  brand_guessed: 'brand inferred',
+  unknown_type: 'unknown type',
+  accessory: 'accessory',
+  bad_qty: 'bad quantity',
+  no_msrp: 'no MSRP',
+  retail_mismatch: 'retail total mismatch',
+  unmapped_category: 'category not mapped',
+  duplicate_in_file: 'duplicate in file',
+}
+---
+
+<Admin title={`Lot ${lot?.lot_code ?? ''}`} subtitle={imp.filename}>
+  <Stepper current={3} importId={imp.id} lotId={lot?.id}
+    done={(lot?.landed_cost_cents ?? 0) > 0 ? [1, 2] : [1]} />
+
+  {imp.status === 'pending' && alreadyUnits > 0 && (
+    <div class="mb-5 rounded-xl border-2 border-red-300 bg-red-50 p-4">
+      <p class="font-semibold text-red-900">
+        This lot already holds {alreadyUnits} units from an earlier import
+      </p>
+      <p class="mt-1 text-sm text-red-800">
+        Committing again <strong>adds</strong> these {list.reduce((n, r) => n + (r.action === 'skip' ? 0 : (r.qty ?? 0)), 0)} units
+        on top — it does not replace them. If you are re-uploading the same manifest to correct
+        something, delete the existing stock first (Lots → delete the lot), or you will end up
+        with double the inventory you actually bought.
+      </p>
+    </div>
+  )}
+
+  {imp.status === 'pending' && (lot?.landed_cost_cents ?? 0) === 0 && (
+    <p class="mb-5 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800">
+      No cost entered for this lot yet, so these products will have no margin.
+      <a href={`/admin/lots/${lot?.id}?step=2&import=${imp.id}`}
+        class="ml-1 font-medium underline underline-offset-2">Add it now →</a>
+    </p>
+  )}
+  <div class="mb-6 grid gap-3 sm:grid-cols-5">
+    {[
+      { l: 'Line items', v: list.length },
+      { l: 'Units', v: units },
+      { l: 'Retail value', v: formatCents(retail) },
+      { l: 'Needs a look', v: flagged.length, warn: flagged.length > 0 },
+      { l: 'Status', v: imp.status },
+    ].map((t) => (
+      <div class:list={['rounded-xl border bg-white px-4 py-3',
+        t.warn ? 'border-amber-300 bg-amber-50/50' : 'border-ink-100']}>
+        <div class="text-xl font-semibold tabular-nums">{t.v}</div>
+        <div class="mt-0.5 text-xs text-ink-500">{t.l}</div>
+      </div>
+    ))}
+  </div>
+
+  {errorMsg && (
+    <p class="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{errorMsg}</p>
+  )}
+
+  <div class="mb-4 flex flex-wrap items-center gap-2 text-sm">
+    <span class="rounded-md bg-emerald-100 px-2 py-1 font-medium text-emerald-800">{counts.new ?? 0} new</span>
+    <span class="rounded-md bg-blue-100 px-2 py-1 font-medium text-blue-800">{counts.match ?? 0} match</span>
+    <span class="rounded-md bg-ink-100 px-2 py-1 font-medium text-ink-500">{counts.skip ?? 0} skip</span>
+  </div>
+
+  {imp.status === 'pending' && (
+    <p class="mb-4 text-sm text-ink-500">
+      The <strong class="font-medium text-ink-900">Action</strong> column decides what happens
+      to each row when you commit.
+      <span class="text-emerald-700">New</span> creates a product ·
+      <span class="text-blue-700">Match</span> adds to one you already stock, so you get a
+      single listing instead of duplicates ·
+      <span class="text-ink-500">Skip</span> ignores the row. Change any of them before committing.
+    </p>
+  )}
+
+  {imp.status === 'pending' ? (
+    <div class="mb-6 flex flex-wrap items-center gap-4 rounded-xl border border-brand-500/30 bg-brand-500/[0.04] p-4">
+      <div class="min-w-0 flex-1">
+        <p class="font-medium">Ready to commit?</p>
+        <p class="mt-0.5 text-sm text-ink-500">
+          Creates {counts.new ?? 0} product{(counts.new ?? 0) === 1 ? '' : 's'} as
+          <strong> drafts</strong>, adds stock to {counts.match ?? 0} existing, ignores {counts.skip ?? 0}.
+          Drafts are invisible to customers until you price and publish them.
+        </p>
+      </div>
+      <form method="POST">
+        <input type="hidden" name="intent" value="commit" />
+        <button type="submit"
+          class:list={['rounded-lg px-5 py-2.5 font-medium text-white transition',
+            alreadyUnits > 0 ? 'bg-red-600 hover:bg-red-700' : 'bg-brand-600 hover:bg-brand-700']}>
+          {alreadyUnits > 0 ? 'Commit anyway — adds to existing stock →' : `Commit ${list.length} rows →`}
+        </button>
+      </form>
+    </div>
+  ) : (
+    <p class="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+      Committed. <a href="/admin/products?status=draft" class="font-medium underline underline-offset-2">
+      See the products →</a>
+    </p>
+  )}
+
+  <div class="overflow-x-auto rounded-xl border border-ink-100 bg-white">
+    <table class="w-full text-sm">
+      <thead class="border-b border-ink-100 text-left text-xs tracking-wide text-ink-500 uppercase">
+        <tr>
+          <th class="px-3 py-3 font-medium">#</th>
+          <th class="px-3 py-3 font-medium">Manifest says</th>
+          <th class="px-3 py-3 font-medium">Will be listed as</th>
+          <th class="px-3 py-3 font-medium">Category</th>
+          <th class="px-3 py-3 text-right font-medium">Qty</th>
+          <th class="px-3 py-3 text-right font-medium">MSRP</th>
+          <th class="px-3 py-3 font-medium">Action</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-ink-100">
+        {list.map((r) => {
+          const flags = (r.flags ?? []) as string[]
+          return (
+            <tr class:list={['align-top', flags.length ? 'bg-amber-50/40' : 'hover:bg-ink-50/60']}>
+              <td class="px-3 py-3 text-xs text-ink-300 tabular-nums">{r.row_number}</td>
+              <td class="px-3 py-3">
+                <div class="font-mono text-xs text-ink-500">{r.raw?.['Item Description']}</div>
+                <div class="mt-0.5 text-xs text-ink-300">
+                  Item #{r.item_no ?? '—'}{r.brand ? ` · ${r.brand}` : ''}
+                </div>
+              </td>
+              <td class="px-3 py-3">
+                <div class="font-medium">{r.description}</div>
+                {flags.length > 0 && (
+                  <div class="mt-1 flex flex-wrap gap-1">
+                    {flags.map((f) => (
+                      <span class="rounded bg-amber-200/70 px-1.5 py-0.5 text-[11px] font-medium text-amber-900">
+                        {FLAG_LABELS[f] ?? f}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </td>
+              <td class="px-3 py-3">
+                {r.category_id
+                  ? <span class="text-ink-900">{catName.get(r.category_id)}</span>
+                  : <span class="text-amber-700">unmapped</span>}
+                <div class="text-xs text-ink-300">{r.source_seller_category ?? '—'}</div>
+              </td>
+              <td class="px-3 py-3 text-right tabular-nums">{r.qty}</td>
+              <td class="px-3 py-3 text-right tabular-nums text-ink-500">{formatCents(r.unit_retail_cents)}</td>
+              <td class="px-3 py-3">
+                {imp.status === 'pending' ? (
+                  <form method="POST" class="flex">
+                    <input type="hidden" name="row_id" value={r.id} />
+                    <select name="action" onchange="this.form.submit()"
+                      title="New: create a product. Match: add to the one you already stock. Skip: ignore this row."
+                      class:list={['rounded-md border px-2 py-1 text-xs font-medium',
+                        r.action === 'new' ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                        : r.action === 'match' ? 'border-blue-300 bg-blue-50 text-blue-800'
+                        : 'border-ink-100 bg-ink-50 text-ink-500']}>
+                      <option value="new" selected={r.action === 'new'}>New</option>
+                      <option value="match" selected={r.action === 'match'}>Match</option>
+                      <option value="skip" selected={r.action === 'skip'}>Skip</option>
+                    </select>
+                  </form>
+                ) : (
+                  /* Already committed — the decision is spent. Show what was
+                     chosen, but don't pretend it can still be changed. */
+                  <span class:list={['inline-block rounded-md border px-2 py-1 text-xs font-medium',
+                    r.action === 'new' ? 'border-emerald-200 bg-emerald-50/60 text-emerald-700'
+                    : r.action === 'match' ? 'border-blue-200 bg-blue-50/60 text-blue-700'
+                    : 'border-ink-100 bg-ink-50 text-ink-300']}>
+                    {r.action === 'new' ? 'Created' : r.action === 'match' ? 'Added to stock' : 'Skipped'}
+                  </span>
+                )}
+              </td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  </div>
+</Admin>

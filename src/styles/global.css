@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+/* Toma Appliances design tokens.
+   Tailwind v4 is configured in CSS — there is no tailwind.config.js. */
+@theme {
+  --color-ink-50: #f6f7f8;
+  --color-ink-100: #eaecef;
+  --color-ink-300: #b9bfc7;
+  --color-ink-500: #6b7480;
+  --color-ink-700: #39414c;
+  --color-ink-900: #171b21;
+
+  --color-brand-500: #1d63d1;
+  --color-brand-600: #1750ac;
+  --color-brand-700: #123f88;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}

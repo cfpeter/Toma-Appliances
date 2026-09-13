@@ -1,0 +1,44 @@
+---
+import Admin from '../../layouts/Admin.astro'
+
+const supabase = Astro.locals.supabase!
+
+const [{ count: pendingImports }, { count: products }, { data: lots }] = await Promise.all([
+  supabase.from('imports').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+  supabase.from('products').select('*', { count: 'exact', head: true }).neq('status', 'deleted'),
+  supabase.from('lots').select('id, lot_code, landed_cost_cents, costs_allocated_at'),
+])
+
+const tiles = [
+  {
+    label: 'Imports awaiting review',
+    value: pendingImports ?? 0,
+    href: '/admin/import',
+    accent: true,
+  },
+  { label: 'Products', value: products ?? 0, href: '/admin/products' },
+  { label: 'Lots', value: lots?.length ?? 0, href: '/admin/lots' },
+]
+---
+
+<Admin title="Dashboard" subtitle="Inventory at a glance.">
+  <div class="grid gap-4 sm:grid-cols-3">
+    {tiles.map((t) => (
+      <a href={t.href}
+        class:list={[
+          'rounded-xl border bg-white p-5 transition hover:shadow-sm',
+          t.accent && t.value > 0 ? 'border-brand-500/40 bg-brand-500/[0.03]' : 'border-ink-100',
+        ]}>
+        <div class="text-3xl font-semibold tabular-nums">{t.value}</div>
+        <div class="mt-1 text-sm text-ink-500">{t.label}</div>
+      </a>
+    ))}
+  </div>
+
+  {(pendingImports ?? 0) > 0 && (
+    <p class="mt-6 rounded-lg bg-brand-500/[0.06] px-4 py-3 text-sm text-brand-700">
+      You have manifests staged and waiting.
+      <a href="/admin/import" class="font-medium underline underline-offset-2">Review them →</a>
+    </p>
+  )}
+</Admin>
