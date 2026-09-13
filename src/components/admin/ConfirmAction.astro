@@ -84,7 +84,13 @@ const confirmClasses =
         if (dialog) {
           // Remember which form this belongs to — the dialog is moved around
           // by the browser's top layer, so we cannot rely on closest() later.
-          ;(dialog as any).__form = opener.closest('form')
+          const owner = opener.closest('form')
+          if (!owner) {
+            // Silent until this existed: with no form to submit, confirming
+            // simply did nothing and looked like the server had refused.
+            console.error('ConfirmAction has no <form> ancestor; nothing would be submitted', opener)
+          }
+          ;(dialog as any).__form = owner
           dialog.showModal()
         }
         return

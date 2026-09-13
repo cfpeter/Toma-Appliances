@@ -25,14 +25,22 @@ const months = [...new Set(all.map((r) => monthKey(r.sold_at)))].sort().reverse(
 const month = monthParam || months[0] || ''
 const list = monthParam === 'all' ? all : all.filter((r) => monthKey(r.sold_at) === month)
 
-const sum = (f: (r: (typeof all)[number]) => number) => list.reduce((a, r) => a + (f(r) || 0), 0)
+// Returned sales stay in the list -- they happened -- but contribute to none
+// of the totals. The view already zeroes their revenue and margin; the counts
+// and the asking-price base have to agree with it, or "off asking" would be
+// measured against units that came back.
+const kept = list.filter((r) => !r.returned_at)
+const returned = list.filter((r) => r.returned_at)
+
+const sum = (f: (r: (typeof all)[number]) => number) => kept.reduce((a, r) => a + (f(r) || 0), 0)
 const units = sum((r) => r.qty)
 const revenue = sum((r) => r.revenue_cents)
 const margin = sum((r) => r.margin_cents)
 // Discount is money given away, measured against what the units were listed at.
 const asked = sum((r) => (r.list_price_cents ?? r.sale_price_cents) * r.qty)
 const givenAway = asked - revenue
-const costKnown = list.every((r) => r.unit_cost_cents != null)
+const costKnown = kept.every((r) => r.unit_cost_cents != null)
+const refunded = returned.reduce((a, r) => a + r.sale_price_cents * r.qty, 0)
 
 const monthLabel = (k: string) =>
   new Date(`${k}-02`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
@@ -72,6 +80,11 @@ const card = 'rounded-xl border border-ink-100 bg-white p-5'
         <div class={card}>
           <div class="text-xs tracking-wide text-ink-500 uppercase">Units sold</div>
           <div class="mt-1 text-3xl font-semibold tabular-nums">{units}</div>
+          {returned.length > 0 && (
+            <div class="mt-1 text-xs text-ink-500">
+              {returned.length} returned · {formatCents(refunded)} refunded
+            </div>
+          )}
         </div>
         <div class={card}>
           <div class="text-xs tracking-wide text-ink-500 uppercase">Taken in</div>
@@ -116,9 +129,14 @@ const card = 'rounded-xl border border-ink-100 bg-white p-5'
           </thead>
           <tbody class="divide-y divide-ink-100">
             {list.map((r) => (
-              <tr class="hover:bg-ink-50/60">
+              <tr class:list={['hover:bg-ink-50/60', r.returned_at && 'text-ink-300']}>
                 <td class="px-4 py-3 whitespace-nowrap text-ink-500">
                   {new Date(r.sold_at).toLocaleDateString()}
+                  {r.returned_at && (
+                    <span class="ml-1.5 rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-ink-700 uppercase">
+                      Returned
+                    </span>
+                  )}
                 </td>
                 <td class="px-4 py-3">
                   <a href={`/admin/products/${r.product_id}`} class="font-medium hover:text-brand-600 hover:underline">{r.name}</a>

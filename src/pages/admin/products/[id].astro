@@ -26,9 +26,31 @@ if (Astro.request.method === 'POST') {
         sale_price_cents: price,
         note: String(form.get('sell_note') ?? '') || null,
       })
-      error = e?.message ?? ''
-      if (!e) notice = `Recorded: ${qty} sold at ${formatCents(price)}.`
+      if (e) error = e.message
+      // Redirect rather than render: this page rendered its own POST result,
+      // so a refresh re-submitted the form and recorded the sale a second
+      // time. Two identical sales, and stock quietly one short.
+      else return Astro.redirect(`/admin/products/${id}?sold=${qty}&at=${price}`, 303)
     }
+  } else if (intent === 'return_sale') {
+    // The customer brought it back. The row stays -- a refunded sale is not
+    // the same as a sale that never happened -- and the unit is back in
+    // stock the moment it is stamped, because quantity is derived.
+    const { data, error: e } = await supabase.rpc('return_sale', {
+      p_sale_id: String(form.get('sale_id') ?? ''),
+      p_note: String(form.get('return_note') ?? '') || null,
+    })
+    if (e) error = e.message
+    else {
+      const r = data as { qty: number; refunded_cents: number }
+      return Astro.redirect(`/admin/products/${id}?returned=${r.qty}&refunded=${r.refunded_cents}`, 303)
+    }
+  } else if (intent === 'undo_sale') {
+    // A sale that never happened. Deleting is right here precisely because
+    // there is nothing real to keep a record of.
+    const { error: e } = await supabase.from('sales').delete().eq('id', String(form.get('sale_id') ?? ''))
+    if (e) error = e.message
+    else return Astro.redirect(`/admin/products/${id}?undone=1`, 303)
   } else if (intent === 'delete') {
     await supabase.from('products').update({ status: 'deleted' }).eq('id', id)
     return Astro.redirect('/admin/products?deleted=1', 303)
@@ -55,10 +77,17 @@ if (Astro.request.method === 'POST') {
     // touched — changing a live URL throws away its search ranking.
     if (status === 'active') patch.published_at = new Date().toISOString()
     const { error: e } = await supabase.from('products').update(patch).eq('id', id)
-    error = e?.message ?? ''
-    if (!e) notice = 'Saved.'
+    if (e) error = e.message
+    else return Astro.redirect(`/admin/products/${id}?saved=1`, 303)
   }
 }
+
+const q = Astro.url.searchParams
+if (q.has('saved')) notice = 'Saved.'
+else if (q.has('sold')) notice = `Recorded: ${q.get('sold')} sold at ${formatCents(Number(q.get('at')))}.`
+else if (q.has('returned'))
+  notice = `Marked returned: ${q.get('returned')} back in stock, ${formatCents(Number(q.get('refunded')))} refunded.`
+else if (q.has('undone')) notice = 'Sale removed. It is as though it was never recorded.'
 
 const { data: p } = await supabase.from('products').select('*').eq('id', id).single()
 if (!p) return Astro.redirect('/admin/products', 302)
@@ -73,7 +102,7 @@ const [{ data: cats }, { data: stockRow }, { data: lines }, { data: sales }, { d
     .eq('product_id', id),
   supabase
     .from('sales')
-    .select('id, qty, sale_price_cents, list_price_cents, sold_at, note')
+    .select('id, qty, sale_price_cents, list_price_cents, sold_at, note, returned_at, return_note')
     .eq('product_id', id)
     .order('sold_at', { ascending: false }),
   supabase
@@ -226,10 +255,19 @@ const field =
           <h2 class="font-semibold">Sales</h2>
           <ul class="mt-3 space-y-2 text-sm">
             {(sales ?? []).map((s) => (
-              <li>
+              <li class:list={[s.returned_at && 'opacity-60']}>
                 <div class="flex justify-between gap-3">
-                  <span class="text-ink-500">{new Date(s.sold_at).toLocaleDateString()}</span>
-                  <span class="tabular-nums font-medium">{s.qty} × {formatCents(s.sale_price_cents)}</span>
+                  <span class="text-ink-500">
+                    {new Date(s.sold_at).toLocaleDateString()}
+                    {s.returned_at && (
+                      <span class="ml-1.5 rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-ink-700 uppercase">
+                        Returned
+                      </span>
+                    )}
+                  </span>
+                  <span class:list={['tabular-nums font-medium', s.returned_at && 'line-through']}>
+                    {s.qty} × {formatCents(s.sale_price_cents)}
+                  </span>
                 </div>
                 {s.list_price_cents != null && s.list_price_cents !== s.sale_price_cents && (
                   <div class="text-xs text-ink-500">
@@ -241,6 +279,34 @@ const field =
                   </div>
                 )}
                 {s.note && <div class="text-xs text-ink-300">{s.note}</div>}
+                {s.return_note && <div class="text-xs text-ink-300">Returned: {s.return_note}</div>}
+
+                {!s.returned_at && (
+                  <form method="POST" class="mt-1.5 flex gap-3 text-xs">
+                    <ConfirmAction
+                      intent="return_sale"
+                      label="Customer returned it"
+                      title="Mark this sale returned?"
+                      message={`${s.qty} unit${s.qty === 1 ? '' : 's'} goes back into stock and ${formatCents(s.sale_price_cents * s.qty)} stops counting as revenue. The sale stays in the history — it did happen.`}
+                      confirmLabel="Mark returned"
+                      tone="warn"
+                      fieldName="sale_id"
+                      fieldValue={s.id}
+                      class="font-medium text-amber-700 hover:underline"
+                    />
+                    <ConfirmAction
+                      intent="undo_sale"
+                      label="Undo — never happened"
+                      title="Remove this sale entirely?"
+                      message="Use this only when the sale was recorded by mistake. The row is deleted, so it will not appear in any report. If the customer genuinely bought it and brought it back, mark it returned instead."
+                      confirmLabel="Delete the record"
+                      tone="danger"
+                      fieldName="sale_id"
+                      fieldValue={s.id}
+                      class="font-medium text-ink-500 hover:underline"
+                    />
+                  </form>
+                )}
               </li>
             ))}
           </ul>
