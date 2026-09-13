@@ -23,6 +23,20 @@ interface Props {
 
 const { business, title, description = '', image, noindex = false } = Astro.props
 
+/**
+ * Whether to offer the owner a way back into the admin.
+ *
+ * This only looks for the presence of a session cookie -- it does not verify
+ * it, because verifying means a round trip to Supabase on every public page
+ * view, and the answer would only decide whether to draw a link. An expired
+ * cookie simply lands on the login page, which is where it belongs.
+ *
+ * Note this is not a security measure. /login is a standard path and always
+ * reachable; the password and the middleware are what protect the admin. The
+ * link is kept quiet so customers are not offered a door marked "staff only".
+ */
+const looksSignedIn = (Astro.request.headers.get('cookie') ?? '').includes('sb-')
+
 const site = Astro.site ?? new URL('http://localhost:4321')
 const canonical = new URL(Astro.url.pathname, site).toString()
 const fullTitle = title === business.name ? title : `${title} · ${business.name}`
@@ -83,6 +97,13 @@ const nav = [
               <span class="hidden sm:inline">{n.label}</span>
             </a>
           ))}
+          {looksSignedIn && (
+            <a
+              href="/admin"
+              rel="nofollow"
+              class="rounded-lg px-2.5 py-2 font-medium whitespace-nowrap text-brand-600 transition hover:bg-brand-500/10 sm:px-3"
+            >Admin</a>
+          )}
           {tel && (
             <a
               href={`tel:${tel}`}
@@ -127,9 +148,14 @@ const nav = [
       </div>
 
       <div class="border-t border-ink-100">
-        <p class="mx-auto max-w-6xl px-4 py-5 text-xs text-ink-300 sm:px-6">
-          © {new Date().getFullYear()} {business.name}. Prices and availability change as stock moves.
-        </p>
+        <div class="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-5 text-xs text-ink-300 sm:px-6">
+          <p>© {new Date().getFullYear()} {business.name}. Prices and availability change as stock moves.</p>
+          <a
+            href="/admin"
+            rel="nofollow"
+            class="ml-auto text-ink-300 transition hover:text-ink-500"
+          >Manage inventory</a>
+        </div>
       </div>
     </footer>
   </body>
