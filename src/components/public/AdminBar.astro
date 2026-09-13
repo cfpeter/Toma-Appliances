@@ -1,0 +1,92 @@
+---
+/**
+ * A way into the editor from the listing you are looking at.
+ *
+ * Deliberately links rather than forms. Price, condition, stock and photos
+ * all have rules attached -- publishing stamps published_at, a sale snapshots
+ * the asking price and the unit cost, stock is refused below zero -- and
+ * those rules live in the admin. A second set of controls here would mean a
+ * second copy of them, and a second copy drifts: that is how the reset
+ * definition and the photo format both went wrong earlier.
+ *
+ * Two taps to the real editor beats one tap to a shortcut that quietly
+ * disagrees with it.
+ *
+ * Only rendered when a session cookie is present. The cookie is not verified
+ * -- see the note in Public.astro -- because this draws links, nothing more.
+ */
+import { conditionLabel } from '../../lib/condition.ts'
+import { formatCents } from '../../lib/money.ts'
+
+interface Props {
+  productId: string
+  priceCents: number | null
+  condition: string | null
+  qtyAvailable: number
+  photoCount: number
+  sold: boolean
+}
+
+const { productId, priceCents, condition, qtyAvailable, photoCount, sold } = Astro.props
+
+const items = [
+  {
+    label: 'Price',
+    value: priceCents ? formatCents(priceCents) : 'not set',
+    warn: !priceCents,
+    href: `/admin/products/${productId}`,
+  },
+  {
+    label: 'Condition',
+    value: conditionLabel(condition),
+    warn: !condition,
+    href: `/admin/products/${productId}`,
+  },
+  {
+    label: 'In stock',
+    value: sold ? 'sold out' : String(qtyAvailable),
+    warn: false,
+    href: `/admin/products/${productId}`,
+  },
+  {
+    label: 'Photos',
+    value: photoCount === 0 ? 'none' : String(photoCount),
+    warn: photoCount === 0,
+    href: `/admin/photos?product=${productId}`,
+  },
+]
+---
+
+<aside class="mb-6 rounded-xl border border-brand-500/25 bg-brand-500/[0.04] p-4">
+  <div class="flex flex-wrap items-center gap-x-6 gap-y-3">
+    <p class="text-sm font-semibold text-brand-700">You're signed in</p>
+
+    <dl class="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+      {items.map((i) => (
+        <a href={i.href} rel="nofollow" class="group flex items-baseline gap-1.5">
+          <dt class="text-ink-500">{i.label}</dt>
+          <dd class:list={[
+            'font-medium underline decoration-dotted underline-offset-4 group-hover:decoration-solid',
+            i.warn ? 'text-amber-700' : 'text-ink-900',
+          ]}>{i.value}</dd>
+        </a>
+      ))}
+    </dl>
+
+    <div class="ml-auto flex gap-2">
+      <a href={`/admin/photos?product=${productId}`} rel="nofollow"
+        class="rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-sm font-medium transition hover:bg-ink-50">
+        {photoCount === 0 ? 'Add photos' : 'Photos'}
+      </a>
+      <a href={`/admin/products/${productId}`} rel="nofollow"
+        class="rounded-lg bg-ink-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-ink-700">
+        Edit listing
+      </a>
+    </div>
+  </div>
+
+  <p class="mt-2.5 text-xs text-ink-300">
+    Customers don't see this. Everything above opens the editor, where the rules that
+    keep prices and stock honest actually live.
+  </p>
+</aside>

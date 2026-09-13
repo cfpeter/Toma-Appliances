@@ -6,6 +6,7 @@
  * to text about a specific machine. So the photo, the price, the condition
  * and the two contact buttons are the page, and everything else is support.
  */
+import AdminBar from '../../components/public/AdminBar.astro'
 import PhotoGallery from '../../components/public/PhotoGallery.astro'
 import ProductCard from '../../components/public/ProductCard.astro'
 import Public from '../../layouts/Public.astro'
@@ -107,6 +108,10 @@ const jsonLd = {
   },
 }
 
+// Presence only, never verified: this decides whether to draw a toolbar, and
+// verifying would mean a Supabase round trip on every public page view.
+const signedIn = (Astro.request.headers.get('cookie') ?? '').includes('sb-')
+
 const facts = [
   product.brand && { label: 'Brand', value: product.brand },
   product.model && { label: 'Model', value: product.model },
@@ -120,6 +125,17 @@ const facts = [
   <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
 
   <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+    {signedIn && (
+      <AdminBar
+        productId={product.id}
+        priceCents={product.price_cents}
+        condition={product.condition}
+        qtyAvailable={product.qty_available}
+        photoCount={shots.length}
+        sold={sold}
+      />
+    )}
+
     <nav aria-label="Breadcrumb" class="flex flex-wrap items-center gap-1.5 text-sm text-ink-500">
       <a href="/appliances" class="hover:text-ink-900">All appliances</a>
       {category && (
