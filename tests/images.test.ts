@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { photoObjectKeys, photoUrl } from '../src/lib/images/keys.ts'
+import { productEnquiry, smsHref } from '../src/lib/public.ts'
 import { SIZES, fit, readImageSize } from '../src/lib/images/resize.ts'
 
 describe('fit', () => {
@@ -131,5 +132,43 @@ describe('object keys and urls', () => {
 
   it('builds a url in the stored format', () => {
     assert.equal(photoUrl('products/p1/ph1', 'thumb', 'jpeg'), '/img/products/p1/ph1-thumb.jpeg')
+  })
+})
+
+describe('productEnquiry', () => {
+  it('names the appliance, the price and the listing', () => {
+    const msg = productEnquiry({
+      name: 'Samsung 1.7 cu. ft. Microwave (ME17R7021ES)',
+      price: '$209.00',
+      url: 'https://tomaappliances.com/appliances/samsung-me17r7021es',
+    })
+    assert.equal(
+      msg,
+      'Hi, is this still available?\n' +
+        'Samsung 1.7 cu. ft. Microwave (ME17R7021ES) - $209.00\n' +
+        'https://tomaappliances.com/appliances/samsung-me17r7021es',
+    )
+  })
+
+  it('drops the price when there is not one', () => {
+    const msg = productEnquiry({ name: 'Samsung Dryer', url: 'https://x.test/a' })
+    assert.equal(msg, 'Hi, is this still available?\nSamsung Dryer\nhttps://x.test/a')
+  })
+})
+
+describe('smsHref', () => {
+  it('uses ?&body= so iOS reads the message', () => {
+    assert.match(smsHref('(619) 655-8719', 'hello'), /^sms:\+16196558719\?&body=hello$/)
+  })
+
+  it('flattens typographic characters that would force UCS-2', () => {
+    // A curly apostrophe alone cuts a text from 160 characters to 70.
+    const href = smsHref('6196558719', 'Samsung’s 27” fridge — $1,299')
+    const body = decodeURIComponent(href.split('body=')[1])
+    assert.equal(body, 'Samsung\'s 27" fridge - $1,299')
+  })
+
+  it('is empty when there is no number, so no button is rendered', () => {
+    assert.equal(smsHref('', 'hello'), '')
   })
 })

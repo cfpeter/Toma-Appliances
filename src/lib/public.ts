@@ -51,6 +51,21 @@ export function telHref(phone: string): string {
 }
 
 /**
+ * Characters outside the GSM-7 alphabet force a text into UCS-2, which cuts
+ * the per-segment budget from 160 characters to 70 -- so a single curly quote
+ * can turn one message into three. The catalogue is full of typographic
+ * dashes and quotes, so they are flattened on the way into a message body.
+ */
+function toPlainText(text: string): string {
+  return text
+    .replace(/[\u2018\u2019\u201b]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/[\u2013\u2014]/g, '-')
+    .replace(/\u2026/g, '...')
+    .replace(/\u00a0/g, ' ')
+}
+
+/**
  * A pre-filled text message. The owner gets a message that already says which
  * appliance it is about, which is the whole reason the listing exists.
  *
@@ -59,7 +74,27 @@ export function telHref(phone: string): string {
  */
 export function smsHref(phone: string, message: string): string {
   const to = telHref(phone)
-  return to ? `sms:${to}?&body=${encodeURIComponent(message)}` : ''
+  return to ? `sms:${to}?&body=${encodeURIComponent(toPlainText(message))}` : ''
+}
+
+/**
+ * The message a customer sends about one appliance.
+ *
+ * The link matters more than it looks: the reply comes back hours later, to
+ * someone who has had four other conversations since, and "is this still
+ * available?" on its own is unanswerable. A tappable link opens the exact
+ * listing, with its price and its stock count.
+ */
+export function productEnquiry(opts: {
+  name: string
+  price?: string
+  url: string
+}): string {
+  return [
+    'Hi, is this still available?',
+    opts.price ? `${opts.name} - ${opts.price}` : opts.name,
+    opts.url,
+  ].join('\n')
 }
 
 /** "1 left" reads as urgency; "2 in stock" reads as choice. Both are true. */

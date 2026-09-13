@@ -11,7 +11,7 @@ import Public from '../../layouts/Public.astro'
 import { conditionBadgeClass, conditionLabel, conditionNote } from '../../lib/condition.ts'
 import { photoUrl } from '../../lib/images/keys.ts'
 import { formatCents } from '../../lib/money.ts'
-import { getBusiness, smsHref, stockLabel, telHref } from '../../lib/public.ts'
+import { getBusiness, productEnquiry, smsHref, stockLabel, telHref } from '../../lib/public.ts'
 import { createPublicClient } from '../../lib/supabase/server.ts'
 
 const { slug } = Astro.params
@@ -56,12 +56,17 @@ for (const r of relatedPhotos ?? []) if (!relatedPhoto.has(r.product_id)) relate
 const category = (cats ?? []).find((c) => c.id === product.category_id)
 const sold = product.status === 'sold' || product.qty_available <= 0
 const tel = telHref(business.phone)
+const site = Astro.site ?? new URL('http://localhost:4321')
+const listingUrl = new URL(Astro.url.pathname, site).toString()
+
 const sms = smsHref(
   business.phone,
-  `Hi, is the ${product.name}${product.price_cents ? ` at ${formatCents(product.price_cents)}` : ''} still available?`,
+  productEnquiry({
+    name: product.name,
+    price: product.price_cents ? formatCents(product.price_cents) : undefined,
+    url: listingUrl,
+  }),
 )
-
-const site = Astro.site ?? new URL('http://localhost:4321')
 const heroImage = shots[0] ? new URL(photoUrl(shots[0].r2_key, 'full', shots[0].format), site).toString() : undefined
 
 const description = [
@@ -96,7 +101,7 @@ const jsonLd = {
         : product.condition === 'for_parts'
           ? 'https://schema.org/DamagedCondition'
           : 'https://schema.org/UsedCondition',
-    url: new URL(Astro.url.pathname, site).toString(),
+    url: listingUrl,
     ...(business.name && { seller: { '@type': 'Organization', name: business.name } }),
   },
 }

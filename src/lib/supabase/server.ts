@@ -2,8 +2,12 @@ import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 import type { AstroCookies } from 'astro'
 
-const url = import.meta.env.PUBLIC_SUPABASE_URL
-const publishable = import.meta.env.PUBLIC_SUPABASE_PUBLISHABLE_KEY
+// Optional-chained because this module is imported by code that also holds
+// pure helpers, and those get exercised by the test runner -- where Vite does
+// not exist and `import.meta.env` is undefined. A client built without them
+// still fails loudly at the point it is actually used.
+const url = import.meta.env?.PUBLIC_SUPABASE_URL
+const publishable = import.meta.env?.PUBLIC_SUPABASE_PUBLISHABLE_KEY
 
 /**
  * Request-scoped client that carries the signed-in user's session.
