@@ -1,0 +1,188 @@
+---
+/**
+ * The photos of one appliance.
+ *
+ * Built on CSS scroll-snap rather than a carousel library, so it swipes with
+ * the platform's own momentum on a phone and works with no JavaScript at all:
+ * the thumbnails are ordinary in-page anchors. A small script upgrades them
+ * to scroll the strip without touching the address bar or the page position,
+ * and lights up the one you are looking at.
+ */
+import { photoUrl } from '../../lib/images/keys.ts'
+
+interface Shot {
+  id: string
+  r2_key: string
+  format?: 'webp' | 'jpeg' | null
+  alt_text?: string | null
+}
+
+interface Props {
+  shots: Shot[]
+  name: string
+  sold: boolean
+}
+
+const { shots, name, sold } = Astro.props
+const id = `gal-${Math.random().toString(36).slice(2, 8)}`
+---
+
+{shots.length === 0 ? (
+  <div class="relative flex aspect-[4/3] flex-col items-center justify-center gap-2 overflow-hidden rounded-2xl border border-ink-100 bg-ink-50 text-ink-300">
+    <svg class="size-12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">
+      <rect x="4" y="2.5" width="16" height="19" rx="2.5" /><path d="M4 9h16" />
+      <circle cx="7.5" cy="6" r=".9" /><circle cx="7.5" cy="15" r=".9" />
+    </svg>
+    <span class="text-sm">Photo coming soon — ask and we'll send one</span>
+    {sold && (
+      <span class="absolute top-3 left-3 rounded-md bg-ink-900/85 px-2.5 py-1.5 text-xs font-semibold tracking-wide text-white uppercase">Sold</span>
+    )}
+  </div>
+) : (
+  <div class="photo-gallery" id={id} data-count={shots.length}>
+    <div class="relative">
+      <div
+        class="flex snap-x snap-mandatory overflow-x-auto scroll-smooth rounded-2xl border border-ink-100 bg-ink-50 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        data-strip
+        tabindex="0"
+        role="group"
+        aria-roledescription="carousel"
+        aria-label={`Photos of ${name}`}
+      >
+        {shots.map((s, i) => (
+          <figure
+            id={`${id}-${i}`}
+            class="aspect-[4/3] w-full shrink-0 snap-center scroll-mt-32"
+            data-slide={i}
+            aria-label={`Photo ${i + 1} of ${shots.length}`}
+          >
+            <img
+              src={photoUrl(s.r2_key, 'full', s.format ?? 'webp')}
+              alt={s.alt_text || `${name} — photo ${i + 1}`}
+              class:list={['size-full object-cover', sold && 'opacity-70']}
+              loading={i === 0 ? 'eager' : 'lazy'}
+              fetchpriority={i === 0 ? 'high' : undefined}
+              decoding="async"
+            />
+          </figure>
+        ))}
+      </div>
+
+      {sold && (
+        <span class="pointer-events-none absolute top-3 left-3 rounded-md bg-ink-900/85 px-2.5 py-1.5 text-xs font-semibold tracking-wide text-white uppercase">Sold</span>
+      )}
+
+      {shots.length > 1 && (
+        <>
+          {/* Hidden until the script runs: without it they would do nothing. */}
+          <button type="button" data-prev hidden
+            class="absolute top-1/2 left-3 hidden size-9 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-ink-900 shadow-md ring-1 ring-ink-900/5 transition hover:bg-white disabled:pointer-events-none disabled:opacity-0 sm:grid">
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>
+            <span class="sr-only">Previous photo</span>
+          </button>
+          <button type="button" data-next hidden
+            class="absolute top-1/2 right-3 hidden size-9 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-ink-900 shadow-md ring-1 ring-ink-900/5 transition hover:bg-white disabled:pointer-events-none disabled:opacity-0 sm:grid">
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            <span class="sr-only">Next photo</span>
+          </button>
+
+          <div class="pointer-events-none absolute bottom-3 left-1/2 flex -translate-x-1/2 gap-1.5 sm:hidden" data-dots>
+            {shots.map((_, i) => (
+              <span class:list={['size-1.5 rounded-full transition', i === 0 ? 'bg-ink-900' : 'bg-ink-900/30']} data-dot={i}></span>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+
+    {shots.length > 1 && (
+      <div class="mt-3 grid grid-cols-5 gap-2 sm:grid-cols-6">
+        {shots.map((s, i) => (
+          <a
+            href={`#${id}-${i}`}
+            data-thumb={i}
+            aria-label={`Show photo ${i + 1}`}
+            class:list={[
+              'aspect-square overflow-hidden rounded-lg border bg-ink-50 transition',
+              i === 0 ? 'border-ink-900' : 'border-ink-100 hover:border-ink-300',
+            ]}
+          >
+            <img
+              src={photoUrl(s.r2_key, 'thumb', s.format ?? 'webp')}
+              alt=""
+              loading="lazy"
+              class="size-full object-cover"
+            />
+          </a>
+        ))}
+      </div>
+    )}
+  </div>
+)}
+
+<script>
+  for (const root of document.querySelectorAll<HTMLElement>('.photo-gallery')) {
+    const strip = root.querySelector<HTMLElement>('[data-strip]')
+    if (!strip) continue
+    const slides = [...root.querySelectorAll<HTMLElement>('[data-slide]')]
+    const thumbs = [...root.querySelectorAll<HTMLAnchorElement>('[data-thumb]')]
+    const dots = [...root.querySelectorAll<HTMLElement>('[data-dot]')]
+    const prev = root.querySelector<HTMLButtonElement>('[data-prev]')
+    const next = root.querySelector<HTMLButtonElement>('[data-next]')
+    let current = 0
+
+    const show = (i: number) => {
+      const clamped = Math.max(0, Math.min(slides.length - 1, i))
+      // `block: 'nearest'` is the whole reason this script exists: the bare
+      // anchor works, but scrolls the page vertically to reach the slide.
+      slides[clamped]?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+    }
+
+    const paint = (i: number) => {
+      current = i
+      for (const [n, t] of thumbs.entries()) {
+        t.classList.toggle('border-ink-900', n === i)
+        t.classList.toggle('border-ink-100', n !== i)
+      }
+      for (const [n, d] of dots.entries()) {
+        d.classList.toggle('bg-ink-900', n === i)
+        d.classList.toggle('bg-ink-900/30', n !== i)
+      }
+      if (prev) prev.disabled = i === 0
+      if (next) next.disabled = i === slides.length - 1
+    }
+
+    for (const [i, t] of thumbs.entries()) {
+      t.addEventListener('click', (e) => {
+        e.preventDefault()
+        show(i)
+      })
+    }
+
+    prev?.addEventListener('click', () => show(current - 1))
+    next?.addEventListener('click', () => show(current + 1))
+    prev?.removeAttribute('hidden')
+    next?.removeAttribute('hidden')
+
+    strip.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight') { e.preventDefault(); show(current + 1) }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); show(current - 1) }
+    })
+
+    // Which slide is actually in view -- swiping changes it as much as the
+    // controls do, so the source of truth is the scroll position, not a click.
+    if ('IntersectionObserver' in window) {
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) paint(Number((entry.target as HTMLElement).dataset.slide))
+          }
+        },
+        { root: strip, threshold: 0.6 },
+      )
+      for (const s of slides) io.observe(s)
+    }
+
+    paint(0)
+  }
+</script>

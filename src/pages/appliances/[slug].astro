@@ -6,6 +6,7 @@
  * to text about a specific machine. So the photo, the price, the condition
  * and the two contact buttons are the page, and everything else is support.
  */
+import PhotoGallery from '../../components/public/PhotoGallery.astro'
 import ProductCard from '../../components/public/ProductCard.astro'
 import Public from '../../layouts/Public.astro'
 import { conditionBadgeClass, conditionLabel, conditionNote } from '../../lib/condition.ts'
@@ -131,40 +132,7 @@ const facts = [
 
     <div class="mt-6 grid gap-8 lg:grid-cols-2 lg:gap-12">
       <div>
-        <div class="relative aspect-[4/3] overflow-hidden rounded-2xl border border-ink-100 bg-ink-50">
-          {shots[0] ? (
-            <img
-              src={photoUrl(shots[0].r2_key, 'full', shots[0].format)}
-              alt={shots[0].alt_text ?? product.name}
-              class:list={['size-full object-cover', sold && 'opacity-70']}
-              fetchpriority="high"
-            />
-          ) : (
-            <div class="flex size-full flex-col items-center justify-center gap-2 text-ink-300">
-              <svg class="size-12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">
-                <rect x="4" y="2.5" width="16" height="19" rx="2.5" /><path d="M4 9h16" />
-                <circle cx="7.5" cy="6" r=".9" /><circle cx="7.5" cy="15" r=".9" />
-              </svg>
-              <span class="text-sm">Photo coming soon — ask and we'll send one</span>
-            </div>
-          )}
-          {sold && (
-            <span class="absolute top-3 left-3 rounded-md bg-ink-900/85 px-2.5 py-1.5 text-xs font-semibold tracking-wide text-white uppercase">
-              Sold
-            </span>
-          )}
-        </div>
-
-        {shots.length > 1 && (
-          <div class="mt-3 grid grid-cols-4 gap-3">
-            {shots.slice(1, 9).map((s) => (
-              <a href={photoUrl(s.r2_key, 'full', s.format)} target="_blank" rel="noreferrer"
-                class="aspect-square overflow-hidden rounded-lg border border-ink-100 bg-ink-50 transition hover:border-ink-300">
-                <img src={photoUrl(s.r2_key, 'thumb', s.format)} alt={s.alt_text ?? ''} loading="lazy" class="size-full object-cover" />
-              </a>
-            ))}
-          </div>
-        )}
+        <PhotoGallery shots={shots} name={product.name} sold={sold} />
       </div>
 
       <div>
