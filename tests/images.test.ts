@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { SIZES, fit } from '../src/lib/images/resize.ts'
+import { SIZES, fit, readImageSize } from '../src/lib/images/resize.ts'
 
 describe('fit', () => {
   it('caps the longest edge and keeps the ratio, landscape', () => {
@@ -57,5 +57,53 @@ describe('SIZES', () => {
     for (const [name, s] of Object.entries(SIZES)) {
       assert.ok(s.quality > 0.5 && s.quality <= 0.9, `${name} quality is unreasonable`)
     }
+  })
+})
+
+describe('readImageSize', () => {
+  /** Minimal File shim: the parser only ever calls slice().arrayBuffer(). */
+  const asFile = (bytes: number[]): File =>
+    ({
+      slice: () => ({ arrayBuffer: async () => new Uint8Array(bytes).buffer }),
+    }) as unknown as File
+
+  it('reads a JPEG SOF0 marker', async () => {
+    // SOI, an APP0 segment to skip over, then SOF0 carrying 6048 x 8064
+    const bytes = [
+      0xff, 0xd8,
+      0xff, 0xe0, 0x00, 0x04, 0x00, 0x00,
+      0xff, 0xc0, 0x00, 0x11, 0x08, 0x17, 0xa0, 0x1f, 0x80,
+      ...new Array(16).fill(0),
+    ]
+    assert.deepEqual(await readImageSize(asFile(bytes)), { width: 8064, height: 6048 })
+  })
+
+  it('skips segments rather than reading the first thing that looks right', async () => {
+    // A comment segment whose payload contains bytes resembling a SOF marker.
+    const bytes = [
+      0xff, 0xd8,
+      0xff, 0xfe, 0x00, 0x06, 0xff, 0xc0, 0x00, 0x11,
+      0xff, 0xc0, 0x00, 0x11, 0x08, 0x04, 0xb0, 0x06, 0x40,
+      ...new Array(16).fill(0),
+    ]
+    assert.deepEqual(await readImageSize(asFile(bytes)), { width: 1600, height: 1200 })
+  })
+
+  it('reads a PNG IHDR', async () => {
+    const bytes = [
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x01, 0x2c, 0x00, 0x00, 0x00, 0xc8,
+      ...new Array(8).fill(0),
+    ]
+    assert.deepEqual(await readImageSize(asFile(bytes)), { width: 300, height: 200 })
+  })
+
+  it('returns null for something it does not recognise', async () => {
+    assert.equal(await readImageSize(asFile(new Array(64).fill(0x41))), null)
+  })
+
+  it('returns null rather than hanging on a truncated file', async () => {
+    assert.equal(await readImageSize(asFile([0xff, 0xd8, 0xff])), null)
   })
 })

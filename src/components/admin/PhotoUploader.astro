@@ -92,7 +92,7 @@ const { productId, photos, compact = false } = Astro.props
 
     const say = (msg: string, tone: 'info' | 'error' = 'info') => {
       status.textContent = msg
-      status.className = `mt-2 text-xs ${tone === 'error' ? 'text-red-700' : 'text-ink-300'}`
+      status.className = `mt-2 text-xs ${tone === 'error' ? 'font-medium text-red-700' : 'text-ink-300'}`
     }
 
     const bumpCount = (delta: number) => {
@@ -134,10 +134,13 @@ const { productId, photos, compact = false } = Astro.props
       if (!files.length) return
 
       let done = 0
-      for (const file of files) {
+      const failures: string[] = []
+      const mb = (n: number) => (n / 1_048_576).toFixed(1) + ' MB'
+      for (const [n, file] of files.entries()) {
         const slot = placeholder()
+        const label = files.length > 1 ? `${file.name} (${n + 1} of ${files.length})` : file.name
         try {
-          say(`Preparing ${file.name}…`)
+          say(`Resizing ${label} — ${mb(file.size)}…`)
           const rendered = await renderSizes(file)
 
           const body = new FormData()
@@ -149,8 +152,10 @@ const { productId, photos, compact = false } = Astro.props
             body.set(r.size, new File([r.blob], `${r.size}.webp`, { type: 'image/webp' }))
           }
 
-          const kb = Math.round(rendered.reduce((n, r) => n + r.blob.size, 0) / 1024)
-          say(`Uploading ${file.name} (${kb} KB)…`)
+          const kb = Math.round(rendered.reduce((a, r) => a + r.blob.size, 0) / 1024)
+          // Both numbers on screen: it is the quickest way to see that the
+          // phone really did shrink the photo before sending it.
+          say(`Uploading ${label} — ${mb(file.size)} shrunk to ${kb} KB…`)
 
           const res = await fetch('/api/admin/photos', { method: 'POST', body })
           const data = (await res.json()) as { photo?: { id: string; r2_key: string }; error?: string }
@@ -164,12 +169,18 @@ const { productId, photos, compact = false } = Astro.props
           bumpCount(1)
           done++
         } catch (e) {
-          say(e instanceof Error ? e.message : 'Something went wrong.', 'error')
+          // Collected rather than shown immediately: the next file's progress
+          // would otherwise wipe the only explanation of what went wrong.
+          failures.push(`${file.name}: ${e instanceof Error ? e.message : 'failed'}`)
         } finally {
           slot.remove()
         }
       }
-      if (done) say(`${done} photo${done === 1 ? '' : 's'} added.`)
+      if (failures.length) {
+        say(failures.join(' · '), 'error')
+      } else if (done) {
+        say(`${done} photo${done === 1 ? '' : 's'} added.`)
+      }
     })
 
     root.addEventListener('click', async (event) => {

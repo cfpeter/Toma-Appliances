@@ -91,7 +91,7 @@ insert into settings (key, value) values
      "phone": "",
      "email": "",
      "show_address": false,
-     "area_text": "Greater Los Angeles — by appointment",
+     "area_text": "",
      "hours": "By appointment"
    }'::jsonb),
   ('catalog', '{
