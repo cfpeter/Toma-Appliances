@@ -21,6 +21,8 @@ export const SIZES: Record<PhotoSize, { edge: number; quality: number }> = {
 export interface RenderedPhoto {
   size: PhotoSize
   blob: Blob
+  /** What the browser actually produced, not what was requested. */
+  type: string
   width: number
   height: number
 }
@@ -148,14 +150,32 @@ async function decode(file: File): Promise<ImageBitmap> {
   return createImageBitmap(file, base)
 }
 
-async function toBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
-  // WebP is ~30% smaller than JPEG at the same perceived quality and has been
-  // safe in every current browser for years.
-  const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob(resolve, 'image/webp', quality),
-  )
-  if (!blob) throw new Error('Could not encode the image.')
-  return blob
+/** In preference order. WebP is ~30% smaller; JPEG works everywhere. */
+const ENCODINGS = ['image/webp', 'image/jpeg'] as const
+export type PhotoFormat = 'webp' | 'jpeg'
+
+/**
+ * Encode the canvas, and check what came back.
+ *
+ * `toBlob` does not fail when it cannot produce the type you asked for -- it
+ * quietly encodes something else. Safari has no WebP encoder, so asking it
+ * for WebP yields a PNG, and a 1600px PNG photograph is several megabytes.
+ * That is what broke uploads from iPhones: the resize worked perfectly and
+ * the result was rejected for being too big.
+ *
+ * So the returned blob's own type is the only thing worth believing.
+ */
+async function encode(
+  canvas: HTMLCanvasElement,
+  quality: number,
+): Promise<{ blob: Blob; type: string }> {
+  for (const type of ENCODINGS) {
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, type, quality),
+    )
+    if (blob && blob.type === type) return { blob, type }
+  }
+  throw new Error('This browser could not encode the resized photo.')
 }
 
 /**
@@ -196,7 +216,8 @@ export async function renderSizes(file: File): Promise<RenderedPhoto[]> {
       ctx.imageSmoothingQuality = 'high'
       ctx.drawImage(bitmap, 0, 0, width, height)
 
-      out.push({ size, blob: await toBlob(canvas, quality), width, height })
+      const { blob, type } = await encode(canvas, quality)
+      out.push({ size, blob, type, width, height })
     }
     return out
   } finally {

@@ -13,6 +13,7 @@ import { photoUrl } from '../../lib/images/keys.ts'
 interface Photo {
   id: string
   r2_key: string
+  format?: 'webp' | 'jpeg' | null
   alt_text?: string | null
 }
 
@@ -41,7 +42,7 @@ const { productId, photos, compact = false } = Astro.props
     {photos.map((p, i) => (
       <figure class="group relative aspect-square overflow-hidden rounded-lg border border-ink-100 bg-ink-50" data-photo={p.id}>
         <img
-          src={photoUrl(p.r2_key, 'thumb')}
+          src={photoUrl(p.r2_key, 'thumb', p.format ?? 'webp')}
           alt={p.alt_text ?? ''}
           loading="lazy"
           class="size-full object-cover"
@@ -149,7 +150,11 @@ const { productId, photos, compact = false } = Astro.props
           body.set('width', String(full.width))
           body.set('height', String(full.height))
           for (const r of rendered) {
-            body.set(r.size, new File([r.blob], `${r.size}.webp`, { type: 'image/webp' }))
+            // The blob's own type, never an assumed one: Safari hands back
+            // JPEG when asked for WebP, and mislabelling it here is what made
+            // an iPhone upload look like an oversized WebP.
+            const ext = r.type === 'image/jpeg' ? 'jpg' : 'webp'
+            body.set(r.size, new File([r.blob], `${r.size}.${ext}`, { type: r.type }))
           }
 
           const kb = Math.round(rendered.reduce((a, r) => a + r.blob.size, 0) / 1024)
@@ -158,12 +163,15 @@ const { productId, photos, compact = false } = Astro.props
           say(`Uploading ${label} — ${mb(file.size)} shrunk to ${kb} KB…`)
 
           const res = await fetch('/api/admin/photos', { method: 'POST', body })
-          const data = (await res.json()) as { photo?: { id: string; r2_key: string }; error?: string }
+          const data = (await res.json()) as {
+            photo?: { id: string; r2_key: string; format: string }
+            error?: string
+          }
           if (!res.ok || !data.photo) throw new Error(data.error ?? 'Upload failed.')
 
           const isFirst = Number(root.dataset.count || 0) === 0
           grid.insertBefore(
-            tile(data.photo.id, `/img/${data.photo.r2_key}-thumb.webp`, isFirst),
+            tile(data.photo.id, `/img/${data.photo.r2_key}-thumb.${data.photo.format}`, isFirst),
             addLabel,
           )
           bumpCount(1)

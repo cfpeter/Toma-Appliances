@@ -52,7 +52,7 @@ const [
   query,
   supabase.from('categories').select('id, name'),
   supabase.from('product_stock').select('product_id, qty_available'),
-  supabase.from('product_photos').select('product_id, r2_key').order('sort_order'),
+  supabase.from('product_photos').select('product_id, r2_key, format').order('sort_order'),
   supabase.from('imports').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
   supabase.from('products').select('*', { count: 'exact', head: true }).eq('status', 'draft'),
   supabase.from('products').select('*', { count: 'exact', head: true }).eq('status', 'deleted'),
@@ -64,10 +64,10 @@ const qty = new Map((stock ?? []).map((s) => [s.product_id, s.qty_available]))
 // in the same glance as the price.
 const photoCount = new Map<string, number>()
 // Ordered by sort_order, so the first one seen for a product is its main shot.
-const mainPhoto = new Map<string, string>()
+const mainPhoto = new Map<string, { key: string; format: 'webp' | 'jpeg' }>()
 for (const r of photoRows ?? []) {
   photoCount.set(r.product_id, (photoCount.get(r.product_id) ?? 0) + 1)
-  if (!mainPhoto.has(r.product_id)) mainPhoto.set(r.product_id, r.r2_key)
+  if (!mainPhoto.has(r.product_id)) mainPhoto.set(r.product_id, { key: r.r2_key, format: r.format })
 }
 const missingPhotos = (products ?? []).filter((p) => !photoCount.get(p.id)).length
 const list = products ?? []
@@ -181,7 +181,7 @@ const filters = ['all', 'draft', 'active', 'sold', 'hidden']
                     {mainPhoto.get(p.id) ? (
                       <a href={`/admin/photos?product=${p.id}`} class="relative shrink-0" title="Manage photos">
                         <img
-                          src={photoUrl(mainPhoto.get(p.id)!, 'thumb')}
+                          src={photoUrl(mainPhoto.get(p.id)!.key, 'thumb', mainPhoto.get(p.id)!.format)}
                           alt=""
                           loading="lazy"
                           width="44"

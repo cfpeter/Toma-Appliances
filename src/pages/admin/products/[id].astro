@@ -78,7 +78,7 @@ const [{ data: cats }, { data: stockRow }, { data: lines }, { data: sales }, { d
     .order('sold_at', { ascending: false }),
   supabase
     .from('product_photos')
-    .select('id, r2_key, alt_text')
+    .select('id, r2_key, format, alt_text')
     .eq('product_id', id)
     .order('sort_order'),
 ])

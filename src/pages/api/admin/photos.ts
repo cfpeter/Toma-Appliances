@@ -14,7 +14,19 @@ import { env } from 'cloudflare:workers'
 import { photoObjectKeys } from '../../../lib/images/keys.ts'
 
 const SIZES = ['thumb', 'card', 'full'] as const
-/** Generous for a resized WebP; a 4 MB original arriving means resize was skipped. */
+
+/**
+ * What the browser managed to encode. Safari has no WebP encoder, so an
+ * iPhone sends JPEG; everything else sends WebP. Anything not on this list --
+ * notably PNG, which is what a canvas quietly falls back to -- is refused,
+ * because a PNG photograph is an order of magnitude larger for no gain.
+ */
+const ACCEPTED: Record<string, 'webp' | 'jpeg'> = {
+  'image/webp': 'webp',
+  'image/jpeg': 'jpeg',
+}
+
+/** Comfortably above a 1600px photo in either format, well below a PNG one. */
 const MAX_BYTES = 3_000_000
 
 const json = (body: unknown, status = 200) =>
@@ -49,17 +61,30 @@ export const POST: APIRoute = async ({ request, locals }) => {
     .maybeSingle()
   if (!product) return json({ error: 'That product no longer exists.' }, 404)
 
-  const parts: { size: string; bytes: ArrayBuffer }[] = []
+  const parts: { size: string; bytes: ArrayBuffer; type: string }[] = []
+  let format: 'webp' | 'jpeg' | null = null
   for (const size of SIZES) {
     const file = form.get(size)
     if (!(file instanceof File)) return json({ error: `Missing the ${size} image.` }, 400)
+    const kind = ACCEPTED[file.type]
+    if (!kind) {
+      return json(
+        { error: `Cannot store ${file.type || 'that'} — this browser could not encode WebP or JPEG.` },
+        415,
+      )
+    }
+    // All three sizes come off the same canvas, so they always agree.
+    if (format && kind !== format) {
+      return json({ error: 'The three sizes disagree about their format.' }, 400)
+    }
+    format = kind
     if (file.size > MAX_BYTES) {
-      return json({ error: `The ${size} image is too large — was it resized?` }, 413)
+      return json(
+        { error: `The ${size} image is ${(file.size / 1_048_576).toFixed(1)} MB, over the ${MAX_BYTES / 1_048_576} MB limit.` },
+        413,
+      )
     }
-    if (file.type !== 'image/webp') {
-      return json({ error: `Expected WebP, got ${file.type || 'nothing'}.` }, 415)
-    }
-    parts.push({ size, bytes: await file.arrayBuffer() })
+    parts.push({ size, bytes: await file.arrayBuffer(), type: file.type })
   }
 
   const photoId = crypto.randomUUID()
@@ -67,11 +92,11 @@ export const POST: APIRoute = async ({ request, locals }) => {
   const written: string[] = []
 
   try {
-    for (const { size, bytes } of parts) {
-      const key = `${stem}-${size}.webp`
+    for (const { size, bytes, type } of parts) {
+      const key = `${stem}-${size}.${format}`
       await bucket.put(key, bytes, {
         httpMetadata: {
-          contentType: 'image/webp',
+          contentType: type,
           // Keys carry a uuid, so an object at a given key never changes.
           cacheControl: 'public, max-age=31536000, immutable',
         },
@@ -92,13 +117,14 @@ export const POST: APIRoute = async ({ request, locals }) => {
       .insert({
         product_id: productId,
         r2_key: stem,
+        format,
         sort_order: (last?.sort_order ?? -1) + 1,
         alt_text: String(form.get('alt') ?? '') || null,
         width: Number(form.get('width')) || null,
         height: Number(form.get('height')) || null,
         bytes: parts.reduce((n, p) => n + p.bytes.byteLength, 0),
       })
-      .select('id, r2_key, sort_order')
+      .select('id, r2_key, format, sort_order')
       .single()
 
     if (error) throw new Error(error.message)
@@ -127,7 +153,7 @@ export const DELETE: APIRoute = async ({ request, locals }) => {
 
   const { data: photo } = await supabase
     .from('product_photos')
-    .select('id, r2_key')
+    .select('id, r2_key, format')
     .eq('id', id)
     .maybeSingle()
   if (!photo) return json({ error: 'That photo is already gone.' }, 404)
@@ -138,7 +164,7 @@ export const DELETE: APIRoute = async ({ request, locals }) => {
   if (error) return json({ error: error.message }, 500)
 
   if (bucket) {
-    for (const key of photoObjectKeys(photo.r2_key)) {
+    for (const key of photoObjectKeys(photo.r2_key, photo.format)) {
       try {
         await bucket.delete(key)
       } catch {

@@ -8,6 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { photoObjectKeys, photoUrl } from '../src/lib/images/keys.ts'
 import { SIZES, fit, readImageSize } from '../src/lib/images/resize.ts'
 
 describe('fit', () => {
@@ -105,5 +106,30 @@ describe('readImageSize', () => {
 
   it('returns null rather than hanging on a truncated file', async () => {
     assert.equal(await readImageSize(asFile([0xff, 0xd8, 0xff])), null)
+  })
+})
+
+describe('object keys and urls', () => {
+  it('uses the format the browser actually produced', () => {
+    // Safari cannot encode WebP, so an iPhone's photos are stored as JPEG and
+    // the key has to say so -- otherwise deleting one misses every object.
+    assert.deepEqual(photoObjectKeys('products/p1/ph1', 'jpeg'), [
+      'products/p1/ph1-thumb.jpeg',
+      'products/p1/ph1-card.jpeg',
+      'products/p1/ph1-full.jpeg',
+    ])
+  })
+
+  it('still defaults to webp, for rows written before the fallback existed', () => {
+    assert.deepEqual(photoObjectKeys('products/p1/ph1'), [
+      'products/p1/ph1-thumb.webp',
+      'products/p1/ph1-card.webp',
+      'products/p1/ph1-full.webp',
+    ])
+    assert.equal(photoUrl('products/p1/ph1', 'card'), '/img/products/p1/ph1-card.webp')
+  })
+
+  it('builds a url in the stored format', () => {
+    assert.equal(photoUrl('products/p1/ph1', 'thumb', 'jpeg'), '/img/products/p1/ph1-thumb.jpeg')
   })
 })

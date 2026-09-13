@@ -35,11 +35,14 @@ if (ids) q = q.in('id', ids.length ? ids : ['none'])
 
 const [{ data: products }, { data: photoRows }, { data: lots }] = await Promise.all([
   q,
-  supabase.from('product_photos').select('id, product_id, r2_key, alt_text').order('sort_order'),
+  supabase.from('product_photos').select('id, product_id, r2_key, format, alt_text').order('sort_order'),
   supabase.from('lots').select('id, lot_code').is('archived_at', null).order('lot_code'),
 ])
 
-const byProduct = new Map<string, { id: string; r2_key: string; alt_text: string | null }[]>()
+const byProduct = new Map<
+  string,
+  { id: string; r2_key: string; format: 'webp' | 'jpeg'; alt_text: string | null }[]
+>()
 for (const r of photoRows ?? []) {
   const list = byProduct.get(r.product_id) ?? []
   list.push(r)
