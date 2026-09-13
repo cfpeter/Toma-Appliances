@@ -1,0 +1,88 @@
+---
+/**
+ * One appliance in a grid.
+ *
+ * The four things a liquidation buyer decides on are the picture, the price,
+ * the condition and whether it is still there -- so all four are legible
+ * without opening the listing.
+ */
+import { conditionBadgeClass, conditionLabel } from '../../lib/condition.ts'
+import { photoUrl } from '../../lib/images/keys.ts'
+import { formatCents } from '../../lib/money.ts'
+import { stockLabel } from '../../lib/public.ts'
+
+interface Props {
+  product: {
+    slug: string
+    name: string
+    brand: string | null
+    price_cents: number | null
+    condition: string | null
+    status: string
+    qty_available: number
+  }
+  photo?: { r2_key: string; format: 'webp' | 'jpeg' } | null
+  showExactQuantity?: boolean
+  /** The first row of the first grid should not wait for a scroll event. */
+  eager?: boolean
+}
+
+const { product: p, photo, showExactQuantity = true, eager = false } = Astro.props
+const sold = p.status === 'sold' || p.qty_available <= 0
+---
+
+<a
+  href={`/appliances/${p.slug}`}
+  class="group flex flex-col overflow-hidden rounded-xl border border-ink-100 bg-white transition hover:-translate-y-0.5 hover:border-ink-300 hover:shadow-lg"
+>
+  <div class="relative aspect-[4/3] overflow-hidden bg-ink-50">
+    {photo ? (
+      <img
+        src={photoUrl(photo.r2_key, 'card', photo.format)}
+        alt={p.name}
+        loading={eager ? 'eager' : 'lazy'}
+        decoding="async"
+        class:list={[
+          'size-full object-cover transition duration-300 group-hover:scale-[1.03]',
+          sold && 'opacity-60',
+        ]}
+      />
+    ) : (
+      <div class="flex size-full items-center justify-center">
+        <svg class="size-10 text-ink-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">
+          <rect x="4" y="2.5" width="16" height="19" rx="2.5" />
+          <path d="M4 9h16" /><circle cx="7.5" cy="6" r=".9" /><circle cx="7.5" cy="15" r=".9" />
+        </svg>
+      </div>
+    )}
+
+    {sold && (
+      <span class="absolute top-2 left-2 rounded-md bg-ink-900/85 px-2 py-1 text-xs font-semibold tracking-wide text-white uppercase">
+        Sold
+      </span>
+    )}
+  </div>
+
+  <div class="flex flex-1 flex-col p-4">
+    {p.brand && (
+      <p class="text-xs font-medium tracking-wide text-ink-300 uppercase">{p.brand}</p>
+    )}
+    <h3 class="mt-0.5 line-clamp-2 font-medium text-ink-900 group-hover:text-brand-700">{p.name}</h3>
+
+    <div class="mt-3 flex flex-wrap items-center gap-2">
+      <span class:list={['rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset', conditionBadgeClass(p.condition)]}>
+        {conditionLabel(p.condition)}
+      </span>
+      {!sold && (
+        <span class:list={[
+          'text-xs font-medium',
+          p.qty_available === 1 && showExactQuantity ? 'text-amber-700' : 'text-ink-500',
+        ]}>{stockLabel(p.qty_available, showExactQuantity)}</span>
+      )}
+    </div>
+
+    <p class="mt-auto pt-4 text-xl font-semibold tabular-nums">
+      {p.price_cents ? formatCents(p.price_cents) : <span class="text-base text-ink-500">Ask for price</span>}
+    </p>
+  </div>
+</a>

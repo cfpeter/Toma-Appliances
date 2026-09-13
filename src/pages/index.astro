@@ -1,22 +1,140 @@
 ---
-import '../styles/global.css'
+/**
+ * The front page.
+ *
+ * A liquidation buyer arrives sceptical: they want to know what the catch is
+ * and what it costs. So the page leads with real stock at real prices rather
+ * than a stock photograph of a kitchen, and says plainly where the appliances
+ * come from.
+ */
+import ProductCard from '../components/public/ProductCard.astro'
+import Public from '../layouts/Public.astro'
+import { getBusiness, telHref } from '../lib/public.ts'
+import { createPublicClient } from '../lib/supabase/server.ts'
+
+const supabase = createPublicClient()
+
+const [business, { data: rows }, { data: cats }] = await Promise.all([
+  getBusiness(),
+  supabase
+    .from('catalog')
+    .select('*')
+    .eq('status', 'active')
+    .order('published_at', { ascending: false, nullsFirst: false })
+    .limit(8),
+  supabase.from('categories').select('id, name, slug, parent_id').order('sort_order'),
+])
+
+const latest = rows ?? []
+const { data: allRows } = await supabase.from('catalog').select('category_id').eq('status', 'active')
+const counts = new Map<string, number>()
+for (const r of allRows ?? []) {
+  if (r.category_id) counts.set(r.category_id, (counts.get(r.category_id) ?? 0) + 1)
+}
+const categories = (cats ?? [])
+  .filter((c) => counts.get(c.id))
+  .sort((a, b) => (counts.get(b.id) ?? 0) - (counts.get(a.id) ?? 0))
+  .slice(0, 6)
+
+const { data: photoRows } = await supabase
+  .from('product_photos')
+  .select('product_id, r2_key, format')
+  .order('sort_order')
+const mainPhoto = new Map<string, { r2_key: string; format: 'webp' | 'jpeg' }>()
+for (const r of photoRows ?? []) if (!mainPhoto.has(r.product_id)) mainPhoto.set(r.product_id, r)
+
+const total = (allRows ?? []).length
+const tel = telHref(business.phone)
 ---
 
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Toma Appliances</title>
-    <meta name="robots" content="noindex" />
-  </head>
-  <body class="min-h-dvh bg-ink-50 font-sans text-ink-900 antialiased">
-    <main class="mx-auto flex min-h-dvh max-w-xl flex-col justify-center px-6">
-      <p class="text-sm font-medium tracking-widest text-brand-600 uppercase">Coming soon</p>
-      <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">Toma Appliances</h1>
-      <p class="mt-4 text-lg text-ink-500">
-        Quality appliances at liquidation prices.
+<Public
+  business={business}
+  title={business.name}
+  description="Used and scratch-and-dent appliances at liquidation prices. Washers, dryers, refrigerators and more — see it before you pay."
+>
+  <section class="border-b border-ink-100 bg-ink-50">
+    <div class="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
+      <p class="text-sm font-medium tracking-widest text-brand-600 uppercase">
+        {total > 0 ? `${total} appliances in stock` : 'New stock arriving'}
       </p>
-      <p class="mt-10 text-sm text-ink-300">Site under construction.</p>
-    </main>
-  </body>
-</html>
+      <h1 class="mt-4 max-w-3xl text-4xl font-semibold tracking-tight sm:text-6xl">
+        Name-brand appliances at liquidation prices.
+      </h1>
+      <p class="mt-5 max-w-2xl text-lg text-ink-500">
+        We buy manufacturer overstock and scratch-and-dent by the truckload, so a
+        refrigerator that retailed for three thousand dollars does not cost three
+        thousand dollars. Every unit is listed with its real condition.
+      </p>
+      <div class="mt-8 flex flex-col gap-3 sm:flex-row">
+        <a href="/appliances" class="rounded-xl bg-ink-900 px-7 py-3.5 text-center font-semibold text-white transition hover:bg-ink-700">
+          Browse what's in stock
+        </a>
+        {tel && (
+          <a href={`tel:${tel}`} class="rounded-xl border border-ink-200 bg-white px-7 py-3.5 text-center font-semibold transition hover:bg-white/60">
+            Call {business.phone}
+          </a>
+        )}
+      </div>
+    </div>
+  </section>
+
+  {categories.length > 0 && (
+    <section class="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+      <h2 class="text-2xl font-semibold tracking-tight">Shop by category</h2>
+      <div class="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {categories.map((c) => (
+          <a href={`/appliances?category=${c.slug}`}
+            class="rounded-xl border border-ink-100 p-4 transition hover:-translate-y-0.5 hover:border-ink-300 hover:shadow-md">
+            <p class="font-medium">{c.name}</p>
+            <p class="mt-0.5 text-sm text-ink-500">{counts.get(c.id)} available</p>
+          </a>
+        ))}
+      </div>
+    </section>
+  )}
+
+  {latest.length > 0 && (
+    <section class="mx-auto max-w-6xl px-4 pb-14 sm:px-6">
+      <div class="flex items-baseline justify-between gap-4">
+        <h2 class="text-2xl font-semibold tracking-tight">Just arrived</h2>
+        <a href="/appliances" class="text-sm font-medium text-brand-600 hover:underline">See all →</a>
+      </div>
+      <div class="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {latest.map((p, i) => (
+          <ProductCard
+            product={p}
+            photo={mainPhoto.get(p.id) ?? null}
+            showExactQuantity={business.show_exact_quantity}
+            eager={i < 4}
+          />
+        ))}
+      </div>
+    </section>
+  )}
+
+  <section class="border-t border-ink-100 bg-ink-50">
+    <div class="mx-auto grid max-w-6xl gap-10 px-4 py-14 sm:grid-cols-3 sm:px-6">
+      <div>
+        <h3 class="font-semibold">Honest condition</h3>
+        <p class="mt-2 text-sm text-ink-500">
+          Every listing states whether it is scratch-and-dent, used, or sold for parts.
+          You see the unit before any money changes hands.
+        </p>
+      </div>
+      <div>
+        <h3 class="font-semibold">No accounts, no checkout</h3>
+        <p class="mt-2 text-sm text-ink-500">
+          Text or call about the one you want. We arrange a time, you look it over,
+          and you pay when you are happy.
+        </p>
+      </div>
+      <div>
+        <h3 class="font-semibold">Stock moves fast</h3>
+        <p class="mt-2 text-sm text-ink-500">
+          Everything here is one truckload deep. When a unit is gone it is gone,
+          so the listing says how many are left.
+        </p>
+      </div>
+    </div>
+  </section>
+</Public>

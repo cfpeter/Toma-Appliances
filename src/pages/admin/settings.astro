@@ -1,0 +1,138 @@
+---
+/**
+ * The words the storefront says about the business.
+ *
+ * All of it lives in one `settings` row rather than in the markup, because
+ * the person who needs to change a phone number should not need a deploy.
+ */
+import Admin from '../../layouts/Admin.astro'
+
+const supabase = Astro.locals.supabase!
+let notice = ''
+let error = ''
+
+const FIELDS = [
+  'name',
+  'phone',
+  'email',
+  'hours',
+  'area_text',
+  'delivery',
+  'warranty',
+  'about',
+] as const
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const next: Record<string, unknown> = {}
+  for (const f of FIELDS) next[f] = String(form.get(f) ?? '').trim()
+  next.show_address = false
+
+  const { data: current } = await supabase
+    .from('settings')
+    .select('value')
+    .eq('key', 'business')
+    .single()
+
+  const { error: e } = await supabase
+    .from('settings')
+    .update({ value: { ...(current?.value ?? {}), ...next } })
+    .eq('key', 'business')
+
+  if (e) error = e.message
+  else return Astro.redirect('/admin/settings?saved=1', 303)
+}
+
+const { data: row } = await supabase
+  .from('settings')
+  .select('value')
+  .eq('key', 'business')
+  .single()
+
+const b = (row?.value ?? {}) as Record<string, string>
+const saved = Astro.url.searchParams.has('saved')
+
+const field =
+  'mt-1 w-full rounded-lg border border-ink-100 bg-white px-3 py-2 text-base outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20'
+const card = 'rounded-xl border border-ink-100 bg-white p-5'
+---
+
+<Admin title="Settings" subtitle="What the public site says about your business.">
+  {saved && (
+    <p class="mb-5 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">Saved.</p>
+  )}
+  {error && <p class="mb-5 rounded-lg bg-red-100 px-4 py-3 text-sm text-red-800">{error}</p>}
+
+  {!b.phone && (
+    <p class="mb-5 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <strong>Your phone number is empty.</strong> Every listing asks the customer to text
+      or call you — without it there is nothing for those buttons to do, so they stay hidden.
+    </p>
+  )}
+
+  <form method="POST" class="max-w-2xl space-y-5">
+    <div class={card}>
+      <h2 class="font-semibold">How customers reach you</h2>
+      <div class="mt-3 grid gap-4 sm:grid-cols-2">
+        <label class="block">
+          <span class="text-sm font-medium">Phone <span class="text-red-600">*</span></span>
+          <input name="phone" type="tel" value={b.phone ?? ''} placeholder="(213) 555-0142" class={field} />
+          <span class="mt-1 block text-xs text-ink-300">Used for both the Text and Call buttons.</span>
+        </label>
+        <label class="block">
+          <span class="text-sm font-medium">Email <span class="font-normal text-ink-300">(optional)</span></span>
+          <input name="email" type="email" value={b.email ?? ''} class={field} />
+        </label>
+      </div>
+    </div>
+
+    <div class={card}>
+      <h2 class="font-semibold">About the business</h2>
+      <div class="mt-3 space-y-4">
+        <label class="block">
+          <span class="text-sm font-medium">Business name</span>
+          <input name="name" value={b.name ?? 'Toma Appliances'} class={field} />
+        </label>
+        <label class="block">
+          <span class="text-sm font-medium">Area served <span class="font-normal text-ink-300">(optional)</span></span>
+          <input name="area_text" value={b.area_text ?? ''} placeholder="e.g. San Diego County" class={field} />
+          <span class="mt-1 block text-xs text-ink-300">Left blank, the site says nothing about location.</span>
+        </label>
+        <label class="block">
+          <span class="text-sm font-medium">Hours</span>
+          <input name="hours" value={b.hours ?? ''} placeholder="By appointment" class={field} />
+        </label>
+        <label class="block">
+          <span class="text-sm font-medium">About <span class="font-normal text-ink-300">(a short paragraph)</span></span>
+          <textarea name="about" rows="3" class={field}>{b.about ?? ''}</textarea>
+        </label>
+      </div>
+    </div>
+
+    <div class={card}>
+      <h2 class="font-semibold">What buyers ask before they call</h2>
+      <div class="mt-3 space-y-4">
+        <label class="block">
+          <span class="text-sm font-medium">Delivery</span>
+          <textarea name="delivery" rows="2" class={field} placeholder="e.g. Local delivery available for a fee. Ask when you call.">{b.delivery ?? ''}</textarea>
+        </label>
+        <label class="block">
+          <span class="text-sm font-medium">Warranty</span>
+          <textarea name="warranty" rows="2" class={field} placeholder="e.g. 30-day warranty on all working appliances.">{b.warranty ?? ''}</textarea>
+        </label>
+      </div>
+      <p class="mt-3 text-xs text-ink-300">
+        Both appear on every listing. Left blank, they are simply not shown.
+      </p>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button type="submit"
+        class="rounded-lg bg-ink-900 px-5 py-2.5 font-medium text-white transition hover:bg-ink-700">
+        Save
+      </button>
+      <a href="/" target="_blank" rel="noreferrer"
+        class="text-sm font-medium text-brand-600 hover:underline">View the public site →</a>
+    </div>
+  </form>
+</Admin>

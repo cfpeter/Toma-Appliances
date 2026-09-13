@@ -1,0 +1,81 @@
+---
+/**
+ * The questions a buyer asks before they will pick up the phone.
+ *
+ * Content comes from settings rather than the markup, so the owner can change
+ * a delivery policy without a deploy.
+ */
+import Public from '../layouts/Public.astro'
+import { getBusiness, smsHref, telHref } from '../lib/public.ts'
+
+const business = await getBusiness()
+const tel = telHref(business.phone)
+const sms = smsHref(business.phone, 'Hi, I have a question about an appliance.')
+
+const blocks = [
+  business.about && { title: 'Who we are', body: business.about },
+  business.delivery && { title: 'Delivery', body: business.delivery },
+  business.warranty && { title: 'Warranty', body: business.warranty },
+  business.hours && { title: 'Hours', body: business.hours },
+  business.area_text && { title: 'Where we are', body: business.area_text },
+].filter(Boolean) as { title: string; body: string }[]
+---
+
+<Public
+  business={business}
+  title="About"
+  description={`How buying from ${business.name} works — condition, delivery, warranty and how to reach us.`}
+>
+  <div class="mx-auto max-w-3xl px-4 py-14 sm:px-6">
+    <h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">About {business.name}</h1>
+
+    <p class="mt-5 text-lg text-ink-500">
+      We buy manufacturer overstock and scratch-and-dent appliances by the truckload
+      and sell them one at a time. That is the whole business, and it is why the
+      prices look the way they do.
+    </p>
+
+    <div class="mt-10 space-y-8">
+      <div>
+        <h2 class="text-xl font-semibold">How buying works</h2>
+        <ol class="mt-3 space-y-3 text-ink-500">
+          <li><span class="font-medium text-ink-900">1.</span> Find the appliance you want and text or call about it.</li>
+          <li><span class="font-medium text-ink-900">2.</span> We arrange a time for you to see it.</li>
+          <li><span class="font-medium text-ink-900">3.</span> You look it over, and pay only if you are happy.</li>
+        </ol>
+        <p class="mt-3 text-sm text-ink-300">
+          There is no cart, no account and no deposit. Nothing is reserved until we have spoken.
+        </p>
+      </div>
+
+      <div>
+        <h2 class="text-xl font-semibold">What the conditions mean</h2>
+        <dl class="mt-3 divide-y divide-ink-100 text-sm">
+          <div class="py-3"><dt class="font-medium">New</dt><dd class="text-ink-500">Never used, in the original packaging.</dd></div>
+          <div class="py-3"><dt class="font-medium">Open box</dt><dd class="text-ink-500">The box was opened. The appliance itself is unused.</dd></div>
+          <div class="py-3"><dt class="font-medium">Scratch &amp; dent</dt><dd class="text-ink-500">Cosmetic marks only — works as it should.</dd></div>
+          <div class="py-3"><dt class="font-medium">Used</dt><dd class="text-ink-500">Previously owned and working. Expect normal wear.</dd></div>
+          <div class="py-3"><dt class="font-medium">For parts</dt><dd class="text-ink-500">Sold as-is, not working. For repair or parts.</dd></div>
+        </dl>
+      </div>
+
+      {blocks.map((b) => (
+        <div>
+          <h2 class="text-xl font-semibold">{b.title}</h2>
+          <p class="mt-2 whitespace-pre-line text-ink-500">{b.body}</p>
+        </div>
+      ))}
+    </div>
+
+    {tel && (
+      <div class="mt-12 rounded-2xl bg-ink-50 p-6">
+        <h2 class="text-xl font-semibold">Ask us anything</h2>
+        <p class="mt-1 text-ink-500">Fastest answer is a text.</p>
+        <div class="mt-5 flex flex-col gap-3 sm:flex-row">
+          <a href={sms} class="flex-1 rounded-xl bg-brand-600 px-6 py-3.5 text-center font-semibold text-white transition hover:bg-brand-700">Text us</a>
+          <a href={`tel:${tel}`} class="flex-1 rounded-xl border border-ink-200 bg-white px-6 py-3.5 text-center font-semibold transition hover:bg-white/60">Call {business.phone}</a>
+        </div>
+      </div>
+    )}
+  </div>
+</Public>

@@ -1,0 +1,219 @@
+---
+/**
+ * The catalogue.
+ *
+ * Every filter is a plain GET parameter and every control is a link or a
+ * form -- no client JavaScript. That keeps a filtered view shareable by
+ * copying the address bar, indexable by Google, and usable on the bad signal
+ * of a parking lot.
+ */
+import ProductCard from '../../components/public/ProductCard.astro'
+import Public from '../../layouts/Public.astro'
+import { CONDITIONS, conditionLabel } from '../../lib/condition.ts'
+import { getBusiness } from '../../lib/public.ts'
+import { createPublicClient } from '../../lib/supabase/server.ts'
+
+const supabase = createPublicClient()
+const params = Astro.url.searchParams
+
+const q = (params.get('q') ?? '').trim()
+const category = params.get('category') ?? ''
+const brand = params.get('brand') ?? ''
+const condition = params.get('condition') ?? ''
+const sort = params.get('sort') ?? 'newest'
+const includeSold = params.get('sold') === '1'
+
+const [business, { data: cats }] = await Promise.all([
+  getBusiness(),
+  supabase.from('categories').select('id, name, slug, parent_id').order('sort_order'),
+])
+
+const categories = cats ?? []
+const bySlug = new Map(categories.map((c) => [c.slug, c]))
+const selected = category ? bySlug.get(category) : undefined
+// A parent like "Kitchen" should return everything filed beneath it.
+const childIds = selected
+  ? categories.filter((c) => c.parent_id === selected.id).map((c) => c.id)
+  : []
+
+let query = supabase.from('catalog').select('*')
+if (!includeSold || !business.show_sold_items) query = query.eq('status', 'active')
+if (selected) query = query.in('category_id', [selected.id, ...childIds])
+if (brand) query = query.eq('brand', brand)
+if (condition) query = query.eq('condition', condition)
+if (q) {
+  // Postgrest `or` needs the commas escaped out of the pattern, so a search
+  // for "samsung, 27" cannot break the filter apart.
+  const safe = q.replace(/[,()]/g, ' ')
+  query = query.or(`name.ilike.%${safe}%,brand.ilike.%${safe}%,model.ilike.%${safe}%`)
+}
+
+query =
+  sort === 'price-asc'
+    ? query.order('price_cents', { ascending: true, nullsFirst: false })
+    : sort === 'price-desc'
+      ? query.order('price_cents', { ascending: false, nullsFirst: false })
+      : query.order('published_at', { ascending: false, nullsFirst: false })
+
+const { data: rows } = await query.limit(300)
+const products = rows ?? []
+
+const { data: photoRows } = await supabase
+  .from('product_photos')
+  .select('product_id, r2_key, format')
+  .order('sort_order')
+const mainPhoto = new Map<string, { r2_key: string; format: 'webp' | 'jpeg' }>()
+for (const r of photoRows ?? []) {
+  if (!mainPhoto.has(r.product_id)) mainPhoto.set(r.product_id, r)
+}
+
+// Facets come from the unfiltered catalogue, so a filter never hides the way
+// back out of itself.
+const { data: allRows } = await supabase.from('catalog').select('brand, category_id, status')
+const live = (allRows ?? []).filter((r) => includeSold || r.status === 'active')
+const brands = [...new Set(live.map((r) => r.brand).filter(Boolean))].sort() as string[]
+const catCount = new Map<string, number>()
+for (const r of live) if (r.category_id) catCount.set(r.category_id, (catCount.get(r.category_id) ?? 0) + 1)
+const usedCategories = categories
+  .filter((c) => catCount.get(c.id))
+  .sort((a, b) => (catCount.get(b.id) ?? 0) - (catCount.get(a.id) ?? 0))
+
+/** Build a link that keeps the other filters intact. */
+function withParam(key: string, value: string): string {
+  const next = new URLSearchParams(params)
+  if (value) next.set(key, value)
+  else next.delete(key)
+  const s = next.toString()
+  return `/appliances${s ? `?${s}` : ''}`
+}
+
+const activeFilters = [
+  selected && { label: selected.name, href: withParam('category', '') },
+  brand && { label: brand, href: withParam('brand', '') },
+  condition && { label: conditionLabel(condition), href: withParam('condition', '') },
+  q && { label: `“${q}”`, href: withParam('q', '') },
+].filter(Boolean) as { label: string; href: string }[]
+
+const heading = selected ? selected.name : q ? `Results for “${q}”` : 'All appliances'
+const pill = 'rounded-full px-3 py-1.5 text-sm font-medium whitespace-nowrap transition'
+---
+
+<Public
+  business={business}
+  title={heading}
+  description={`Browse ${products.length} used and scratch-and-dent appliances at liquidation prices.`}
+  noindex={Boolean(q)}
+>
+  <div class="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+    <h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">{heading}</h1>
+
+    <form method="GET" action="/appliances" class="mt-6 flex gap-2">
+      {category && <input type="hidden" name="category" value={category} />}
+      {brand && <input type="hidden" name="brand" value={brand} />}
+      {condition && <input type="hidden" name="condition" value={condition} />}
+      <div class="relative flex-1">
+        <svg class="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-ink-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
+        </svg>
+        <input
+          type="search" name="q" value={q}
+          placeholder="Search by brand, model or name…"
+          aria-label="Search appliances"
+          class="w-full rounded-xl border border-ink-100 bg-white py-3 pr-4 pl-10 text-base outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20"
+        />
+      </div>
+      <button type="submit" class="rounded-xl bg-ink-900 px-5 font-medium text-white transition hover:bg-ink-700">
+        Search
+      </button>
+    </form>
+
+    <div class="mt-5 -mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+      <div class="flex gap-2">
+        <a href={withParam('category', '')} class:list={[pill, !category ? 'bg-ink-900 text-white' : 'bg-ink-50 text-ink-700 hover:bg-ink-100']}>
+          Everything
+        </a>
+        {usedCategories.map((c) => (
+          <a href={withParam('category', c.slug)} class:list={[pill, category === c.slug ? 'bg-ink-900 text-white' : 'bg-ink-50 text-ink-700 hover:bg-ink-100']}>
+            {c.name} <span class="text-ink-300">{catCount.get(c.id)}</span>
+          </a>
+        ))}
+      </div>
+    </div>
+
+    <div class="mt-4 flex flex-wrap items-center gap-x-4 gap-y-3 border-t border-ink-100 pt-4 text-sm">
+      <label class="flex items-center gap-2">
+        <span class="text-ink-500">Brand</span>
+        <select onchange="location=this.value" class="rounded-lg border border-ink-100 bg-white px-2.5 py-1.5 outline-none focus:border-brand-500">
+          <option value={withParam('brand', '')} selected={!brand}>Any</option>
+          {brands.map((b) => (
+            <option value={withParam('brand', b)} selected={brand === b}>{b}</option>
+          ))}
+        </select>
+      </label>
+
+      <label class="flex items-center gap-2">
+        <span class="text-ink-500">Condition</span>
+        <select onchange="location=this.value" class="rounded-lg border border-ink-100 bg-white px-2.5 py-1.5 outline-none focus:border-brand-500">
+          <option value={withParam('condition', '')} selected={!condition}>Any</option>
+          {CONDITIONS.map((c) => (
+            <option value={withParam('condition', c)} selected={condition === c}>{conditionLabel(c)}</option>
+          ))}
+        </select>
+      </label>
+
+      <label class="flex items-center gap-2">
+        <span class="text-ink-500">Sort</span>
+        <select onchange="location=this.value" class="rounded-lg border border-ink-100 bg-white px-2.5 py-1.5 outline-none focus:border-brand-500">
+          <option value={withParam('sort', 'newest')} selected={sort === 'newest'}>Newest first</option>
+          <option value={withParam('sort', 'price-asc')} selected={sort === 'price-asc'}>Price: low to high</option>
+          <option value={withParam('sort', 'price-desc')} selected={sort === 'price-desc'}>Price: high to low</option>
+        </select>
+      </label>
+
+      {business.show_sold_items && (
+        <a href={withParam('sold', includeSold ? '' : '1')} class="ml-auto text-ink-500 hover:text-ink-900">
+          {includeSold ? 'Hide sold items' : 'Show sold items'}
+        </a>
+      )}
+    </div>
+
+    {activeFilters.length > 0 && (
+      <div class="mt-4 flex flex-wrap items-center gap-2 text-sm">
+        <span class="text-ink-500">Filtered by</span>
+        {activeFilters.map((f) => (
+          <a href={f.href} class="inline-flex items-center gap-1.5 rounded-full bg-brand-500/10 px-3 py-1 font-medium text-brand-700 hover:bg-brand-500/20">
+            {f.label}
+            <span aria-hidden="true">×</span>
+            <span class="sr-only">Remove this filter</span>
+          </a>
+        ))}
+        <a href="/appliances" class="text-ink-500 underline underline-offset-2 hover:text-ink-900">Clear all</a>
+      </div>
+    )}
+
+    <p class="mt-6 text-sm text-ink-500">
+      {products.length === 0 ? 'No matches' : `${products.length} appliance${products.length === 1 ? '' : 's'}`}
+    </p>
+
+    {products.length === 0 ? (
+      <div class="mt-4 rounded-xl border border-dashed border-ink-100 p-12 text-center">
+        <p class="font-medium">Nothing matches that yet.</p>
+        <p class="mt-1 text-sm text-ink-500">
+          Stock changes every time a truck lands — try a broader search, or
+          <a href="/appliances" class="font-medium text-brand-600 hover:underline"> browse everything</a>.
+        </p>
+      </div>
+    ) : (
+      <div class="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {products.map((p, i) => (
+          <ProductCard
+            product={p}
+            photo={mainPhoto.get(p.id) ?? null}
+            showExactQuantity={business.show_exact_quantity}
+            eager={i < 4}
+          />
+        ))}
+      </div>
+    )}
+  </div>
+</Public>

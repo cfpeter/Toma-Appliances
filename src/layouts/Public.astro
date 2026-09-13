@@ -1,0 +1,136 @@
+---
+/**
+ * The storefront shell.
+ *
+ * Everything here is server-rendered with no client JavaScript: the pages are
+ * a catalogue and a phone number, and a customer standing in a parking lot on
+ * one bar of signal should not wait for a framework to boot before they can
+ * read a price.
+ */
+import type { Business } from '../lib/public.ts'
+import { telHref } from '../lib/public.ts'
+import '../styles/global.css'
+
+interface Props {
+  business: Business
+  title: string
+  description?: string
+  /** Absolute URL of an image for link previews. */
+  image?: string
+  /** Sold listings stay indexed; thin or duplicated pages should not. */
+  noindex?: boolean
+}
+
+const { business, title, description = '', image, noindex = false } = Astro.props
+
+const site = Astro.site ?? new URL('http://localhost:4321')
+const canonical = new URL(Astro.url.pathname, site).toString()
+const fullTitle = title === business.name ? title : `${title} · ${business.name}`
+const tel = telHref(business.phone)
+
+// Short label on a phone, where the header has about 120px to spare between
+// the wordmark and the Call button.
+const nav = [
+  { href: '/appliances', label: 'All appliances', short: 'Browse' },
+  { href: '/about', label: 'About', short: 'About' },
+]
+---
+
+<!doctype html>
+<html lang="en" class="scroll-smooth">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    {description && <meta name="description" content={description} />}
+    <link rel="canonical" href={canonical} />
+    {noindex && <meta name="robots" content="noindex, follow" />}
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={fullTitle} />
+    {description && <meta property="og:description" content={description} />}
+    <meta property="og:url" content={canonical} />
+    {image && <meta property="og:image" content={image} />}
+    <meta name="twitter:card" content={image ? 'summary_large_image' : 'summary'} />
+
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta name="theme-color" content="#171b21" />
+  </head>
+
+  <body class="min-h-dvh bg-white font-sans text-ink-900 antialiased">
+    <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:m-3 focus:rounded-lg focus:bg-ink-900 focus:px-4 focus:py-2 focus:text-white">
+      Skip to content
+    </a>
+
+    <header class="sticky top-0 z-40 border-b border-ink-100 bg-white/85 backdrop-blur">
+      <div class="mx-auto flex max-w-6xl items-center gap-4 px-4 py-3.5 sm:px-6">
+        <a href="/" class="shrink-0 text-base font-semibold tracking-tight whitespace-nowrap sm:text-lg">
+          Toma<span class="text-brand-600">Appliances</span>
+        </a>
+
+        <nav class="ml-auto flex items-center gap-0.5 text-sm sm:gap-1">
+          {nav.map((n) => (
+            <a
+              href={n.href}
+              class:list={[
+                'rounded-lg px-2.5 py-2 font-medium whitespace-nowrap transition sm:px-3',
+                Astro.url.pathname.startsWith(n.href)
+                  ? 'text-ink-900'
+                  : 'text-ink-500 hover:bg-ink-50 hover:text-ink-900',
+              ]}
+            >
+              <span class="sm:hidden">{n.short}</span>
+              <span class="hidden sm:inline">{n.label}</span>
+            </a>
+          ))}
+          {tel && (
+            <a
+              href={`tel:${tel}`}
+              class="ml-0.5 shrink-0 rounded-lg bg-ink-900 px-3 py-2 font-medium whitespace-nowrap text-white transition hover:bg-ink-700 sm:ml-1 sm:px-3.5"
+            >Call</a>
+          )}
+        </nav>
+      </div>
+    </header>
+
+    <main id="main"><slot /></main>
+
+    <footer class="mt-20 border-t border-ink-100 bg-ink-50">
+      <div class="mx-auto grid max-w-6xl gap-8 px-4 py-12 sm:grid-cols-3 sm:px-6">
+        <div>
+          <p class="font-semibold">{business.name}</p>
+          {business.area_text && <p class="mt-1 text-sm text-ink-500">{business.area_text}</p>}
+          {business.hours && <p class="mt-1 text-sm text-ink-500">{business.hours}</p>}
+        </div>
+
+        <div class="text-sm">
+          <p class="font-medium text-ink-900">Browse</p>
+          <ul class="mt-2 space-y-1.5">
+            <li><a href="/appliances" class="text-ink-500 hover:text-ink-900">All appliances</a></li>
+            <li><a href="/about" class="text-ink-500 hover:text-ink-900">About &amp; delivery</a></li>
+          </ul>
+        </div>
+
+        <div class="text-sm">
+          <p class="font-medium text-ink-900">Get in touch</p>
+          {tel ? (
+            <ul class="mt-2 space-y-1.5">
+              <li><a href={`tel:${tel}`} class="text-ink-500 hover:text-ink-900">{business.phone}</a></li>
+              {business.email && (
+                <li><a href={`mailto:${business.email}`} class="text-ink-500 hover:text-ink-900">{business.email}</a></li>
+              )}
+            </ul>
+          ) : (
+            <p class="mt-2 text-ink-300">Contact details coming soon.</p>
+          )}
+        </div>
+      </div>
+
+      <div class="border-t border-ink-100">
+        <p class="mx-auto max-w-6xl px-4 py-5 text-xs text-ink-300 sm:px-6">
+          © {new Date().getFullYear()} {business.name}. Prices and availability change as stock moves.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
