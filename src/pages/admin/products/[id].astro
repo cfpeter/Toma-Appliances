@@ -199,7 +199,7 @@ const field =
       </div>
 
       {stock.qty_available > 0 && (
-        <form method="POST" class="rounded-xl border border-ink-100 bg-white p-5">
+        <form method="POST" id="sell" class="scroll-mt-24 rounded-xl border border-ink-100 bg-white p-5">
           <h2 class="font-semibold">Record a sale</h2>
           <p class="mt-1 text-xs text-ink-500">
             Asking {p.price_cents ? formatCents(p.price_cents) : '—'}. Change the price below if you
@@ -282,5 +282,26 @@ const field =
     input.addEventListener('input', render)
     render()
   })()
+</script>
+
+<script is:inline>
+  // Arriving from a listing's "Mark sold": put the cursor in the price, not
+  // at the top of a long editor. The price is what has to be typed, because
+  // it was negotiated -- assuming the asking price is exactly the mistake
+  // the snapshot columns exist to prevent.
+  //
+  // Deferred to the next frame after load: the browser handles the fragment
+  // itself first, and doing this during parsing means it scrolls the anchor
+  // into view and takes the focus straight back off the field.
+  if (location.hash === '#sell') {
+    addEventListener('load', () => {
+      requestAnimationFrame(() => {
+        const price = document.getElementById('sell_price')
+        if (!price) return
+        price.focus({ preventScroll: true })
+        price.select()
+      })
+    })
+  }
 </script>
 </Admin>

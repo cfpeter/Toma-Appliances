@@ -73,7 +73,13 @@ const items = [
       ))}
     </dl>
 
-    <div class="ml-auto flex gap-2">
+    <div class="ml-auto flex flex-wrap gap-2">
+      {!sold && (
+        <a href={`/admin/products/${productId}#sell`} rel="nofollow"
+          class="rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-sm font-medium transition hover:bg-ink-50">
+          Mark sold
+        </a>
+      )}
       <a href={`/admin/photos?product=${productId}`} rel="nofollow"
         class="rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-sm font-medium transition hover:bg-ink-50">
         {photoCount === 0 ? 'Add photos' : 'Photos'}
@@ -86,7 +92,8 @@ const items = [
   </div>
 
   <p class="mt-2.5 text-xs text-ink-300">
-    Customers don't see this. Everything above opens the editor, where the rules that
-    keep prices and stock honest actually live.
+    Customers don't see this. <strong class="font-medium text-ink-500">Mark sold</strong> opens the
+    sale form with the price ready to type — it is not filled in for you, because what a unit
+    went for is rarely what it was listed at, and the difference is worth keeping.
   </p>
 </aside>
