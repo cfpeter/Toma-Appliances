@@ -49,6 +49,12 @@ const nav = [
           ))}
         </nav>
         <span class="hidden text-xs text-ink-300 sm:block">{email}</span>
+        <form method="POST" action="/logout" class="shrink-0">
+          <button type="submit"
+            class="rounded-lg px-2.5 py-1.5 text-sm font-medium text-ink-500 transition hover:bg-ink-100 hover:text-ink-900">
+            Sign out
+          </button>
+        </form>
       </div>
     </header>
 

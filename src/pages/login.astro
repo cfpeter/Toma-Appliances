@@ -34,6 +34,12 @@ if (Astro.request.method === 'POST') {
         <p class="mt-5 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
       )}
 
+      {Astro.url.searchParams.has('signedout') && !error && (
+        <p class="mt-5 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          Signed out. This device will not stay logged in.
+        </p>
+      )}
+
       <form method="POST" class="mt-6 space-y-4">
         <input type="hidden" name="next" value={next} />
         <div>

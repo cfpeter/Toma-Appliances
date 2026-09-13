@@ -15,8 +15,24 @@ export function createSupabaseServerClient(cookies: AstroCookies, request: Reque
       // AstroCookies has no getAll(), so read the request header directly.
       getAll: () => parseCookieHeader(request.headers.get('cookie') ?? ''),
       setAll: (list) => {
+        // Served over TLS everywhere except local development, where `secure`
+        // would stop the cookie being stored at all.
+        const secure = new URL(request.url).protocol === 'https:'
         for (const { name, value, options } of list) {
-          cookies.set(name, value, { ...options, path: '/' })
+          cookies.set(name, value, {
+            ...options,
+            path: '/',
+            // Nothing in the browser reads this cookie -- the app is server
+            // rendered and fetch() sends it automatically -- so keeping it out
+            // of JavaScript's reach costs nothing and removes a whole class of
+            // ways a session can be stolen.
+            httpOnly: true,
+            secure,
+            sameSite: 'lax',
+            // 400 days, the longest a browser will honour. Signing in once and
+            // staying signed in is the point; `Sign out` is how you end it.
+            maxAge: 400 * 24 * 60 * 60,
+          })
         }
       },
     },
