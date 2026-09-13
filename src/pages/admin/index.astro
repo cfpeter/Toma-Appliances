@@ -1,7 +1,55 @@
 ---
+import { env } from 'cloudflare:workers'
 import Admin from '../../layouts/Admin.astro'
 
 const supabase = Astro.locals.supabase!
+
+/**
+ * The reset button exists only while the site is being tested against real
+ * data. It is gated on a variable rather than hidden behind a URL so it can
+ * be switched off for good -- `wrangler secret delete ALLOW_DATA_RESET` --
+ * without a code change, on the day testing stops. A permanent "delete
+ * everything" control in a live admin gets clicked eventually.
+ */
+const resetAllowed = String(import.meta.env.ALLOW_DATA_RESET ?? '') === '1'
+
+let resetNotice = ''
+let resetError = ''
+
+if (Astro.request.method === 'POST' && resetAllowed) {
+  const form = await Astro.request.formData()
+  if (String(form.get('confirm') ?? '').trim() !== 'RESET') {
+    resetError = 'Type RESET exactly to confirm. Nothing was deleted.'
+  } else {
+    const { data, error } = await supabase.rpc('reset_test_data')
+    if (error) {
+      resetError = error.message
+    } else {
+      // The rows are gone; the images they pointed at are not. Only this
+      // Worker holds the bucket binding, which is why the admin can finish
+      // the job that the command-line script cannot.
+      let removed = 0
+      const bucket = env.PHOTOS
+      if (bucket) {
+        let cursor: string | undefined
+        do {
+          const page = await bucket.list({ prefix: 'products/', cursor, limit: 1000 })
+          const keys = page.objects.map((o) => o.key)
+          if (keys.length) {
+            await bucket.delete(keys)
+            removed += keys.length
+          }
+          cursor = page.truncated ? page.cursor : undefined
+        } while (cursor)
+      }
+      const c = data as Record<string, number>
+      resetNotice =
+        `Wiped ${c.products} product${c.products === 1 ? '' : 's'}, ${c.lots} lot${c.lots === 1 ? '' : 's'}, ` +
+        `${c.sales} sale${c.sales === 1 ? '' : 's'} and ${removed} photo file${removed === 1 ? '' : 's'}. ` +
+        'Your login, categories and settings are untouched.'
+    }
+  }
+}
 
 const [{ count: pendingImports }, { count: products }, { data: lots }] = await Promise.all([
   supabase.from('imports').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
@@ -40,5 +88,35 @@ const tiles = [
       You have manifests staged and waiting.
       <a href="/admin/import" class="font-medium underline underline-offset-2">Review them →</a>
     </p>
+  )}
+
+  {resetAllowed && (
+    <section class="mt-12 rounded-xl border border-red-200 bg-red-50/40 p-5">
+      <h2 class="font-semibold text-red-800">Start over</h2>
+      <p class="mt-1 max-w-2xl text-sm text-ink-500">
+        Deletes every product, lot, import, sale and photo — including the ones live on
+        the site right now. Your login, categories and settings stay. For clearing out a
+        test run; there is no undo.
+      </p>
+
+      {resetNotice && (
+        <p class="mt-3 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{resetNotice}</p>
+      )}
+      {resetError && (
+        <p class="mt-3 rounded-lg bg-red-100 px-4 py-3 text-sm text-red-800">{resetError}</p>
+      )}
+
+      <form method="POST" class="mt-4 flex flex-wrap items-end gap-3">
+        <label class="block">
+          <span class="text-xs text-ink-500">Type <strong class="font-mono">RESET</strong> to confirm</span>
+          <input name="confirm" autocomplete="off" spellcheck="false" placeholder="RESET"
+            class="mt-1 w-44 rounded-lg border border-ink-100 bg-white px-3 py-2 font-mono text-base outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20" />
+        </label>
+        <button type="submit"
+          class="rounded-lg bg-red-600 px-4 py-2.5 font-medium text-white transition hover:bg-red-700">
+          Delete everything
+        </button>
+      </form>
+    </section>
   )}
 </Admin>

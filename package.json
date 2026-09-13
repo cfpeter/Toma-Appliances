@@ -10,7 +10,7 @@
     "check": "astro check",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "test": "node --test \"tests/*.test.ts\"",
+    "test": "node --test --test-concurrency=1 \"tests/*.test.ts\"",
     "reset": "node scripts/reset-data.mjs"
   },
   "dependencies": {

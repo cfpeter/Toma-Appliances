@@ -7,7 +7,11 @@
  * you would otherwise have to recreate by hand before the next run.
  *
  *   node scripts/reset-data.mjs          # dry run — shows what would go
- *   node scripts/reset-data.mjs --yes    # actually do it
+ *   node scripts/reset-data.mjs --yes    # asks you to type RESET, then does it
+ *
+ * There is one database and it is the one tomaappliances.com is serving. The
+ * typed confirmation exists because --yes on its own is far too easy to reach
+ * for out of habit, and habit is what this deletes.
  *
  * WIPED   products, stock_lines, sales, product_photos, lots, imports,
  *         import_rows, and the photo objects in the local R2 store
@@ -15,6 +19,7 @@
  *         _migrations
  */
 import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { createInterface } from 'node:readline/promises'
 import pg from 'pg'
 
 const WIPE = [
@@ -95,6 +100,23 @@ if (!go) {
   process.exit(0)
 }
 
+// Typed confirmation. `--yes` alone is not enough: this is the database the
+// live site reads from, and the two are indistinguishable from the terminal.
+if (!process.stdin.isTTY) {
+  console.log('\n  Refusing to run without a terminal to confirm at.\n')
+  await db.end()
+  process.exit(1)
+}
+console.log('\n  ⚠️  This is the database https://tomaappliances.com is serving.')
+const rl = createInterface({ input: process.stdin, output: process.stdout })
+const typed = await rl.question('  Type RESET to wipe it, anything else to stop: ')
+rl.close()
+if (typed.trim() !== 'RESET') {
+  console.log('\n  Nothing was deleted.\n')
+  await db.end()
+  process.exit(0)
+}
+
 // One transaction: either the whole reset happens or none of it does.
 await db.query('begin')
 try {
@@ -108,10 +130,9 @@ try {
 }
 
 // Deleting the product_photos rows leaves the image objects behind, and they
-// are unreachable once nothing points at them. Local development uses
-// miniflare's on-disk R2, so the objects are simply a directory.
-// (A deployed bucket needs `wrangler r2 object delete` or a lifecycle rule --
-// nothing here can reach it.)
+// are unreachable once nothing points at them. This clears the local
+// miniflare store; photos in the real bucket are out of reach from here --
+// use the admin's own reset, which holds the R2 binding and purges them.
 const localR2 = new URL('../.wrangler/state/v3/r2', import.meta.url)
 let photosCleared = false
 if (existsSync(localR2)) {

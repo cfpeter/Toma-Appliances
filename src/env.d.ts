@@ -13,6 +13,8 @@ interface ImportMetaEnv {
   readonly SUPABASE_SECRET_KEY: string
   readonly PUBLIC_SITE_URL: string
   readonly PUBLIC_IMAGE_BASE_URL: string
+  /** '1' while testing: shows the reset control in the admin. */
+  readonly ALLOW_DATA_RESET: string
 }
 interface ImportMeta {
   readonly env: ImportMetaEnv
