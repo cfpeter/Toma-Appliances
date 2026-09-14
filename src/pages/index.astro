@@ -45,12 +45,50 @@ for (const r of photoRows ?? []) if (!mainPhoto.has(r.product_id)) mainPhoto.set
 
 const total = (allRows ?? []).length
 const tel = telHref(business.phone)
+const site = Astro.site ?? new URL('http://localhost:4321')
+
+/**
+ * Who the business is, in the form a search engine reads.
+ *
+ * This is the markup that local results run on -- "used appliances near me"
+ * is answered from business data, not from page copy. The phone number is the
+ * part that matters most: it is what turns a result into a tap-to-call.
+ *
+ * No address: the owner sells by appointment and deliberately does not
+ * publish one. `areaServed` carries the coverage instead, and is omitted
+ * entirely rather than guessed when it has not been filled in.
+ */
+const orgSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'Store',
+  '@id': new URL('/', site).toString(),
+  name: business.name,
+  url: new URL('/', site).toString(),
+  description:
+    'Used, open-box and scratch-and-dent home appliances at liquidation prices. ' +
+    'Refrigerators, washers, dryers, dishwashers, ranges and microwaves.',
+  ...(business.phone && { telephone: business.phone }),
+  ...(business.email && { email: business.email }),
+  ...(business.area_text && { areaServed: business.area_text }),
+  ...(business.hours && { openingHours: business.hours }),
+  priceRange: '$$',
+  image: new URL('/favicon.svg', site).toString(),
+  potentialAction: {
+    '@type': 'SearchAction',
+    target: {
+      '@type': 'EntryPoint',
+      urlTemplate: new URL('/appliances?q={search_term_string}', site).toString(),
+    },
+    'query-input': 'required name=search_term_string',
+  },
+}
 ---
 
 <Public
   business={business}
   title={business.name}
-  description="Used and scratch-and-dent appliances at liquidation prices. Washers, dryers, refrigerators and more — see it before you pay."
+  description="Used, open-box and scratch-and-dent appliances at liquidation prices — refrigerators, washers, dryers, dishwashers and more. Condition stated on every unit. See it before you pay."
+  schema={orgSchema}
 >
   <section class="border-b border-ink-100 bg-ink-50">
     <div class="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-24">

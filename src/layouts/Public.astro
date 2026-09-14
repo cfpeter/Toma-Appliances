@@ -19,9 +19,26 @@ interface Props {
   image?: string
   /** Sold listings stay indexed; thin or duplicated pages should not. */
   noindex?: boolean
+  /**
+   * Query parameters that make this a genuinely different page rather than a
+   * rearrangement of the same one. Without them the canonical drops the query
+   * string entirely, which told Google every category page was a duplicate of
+   * /appliances -- an instruction to index the other one instead.
+   */
+  canonicalParams?: string[]
+  /** Extra JSON-LD for this page. */
+  schema?: unknown
 }
 
-const { business, title, description = '', image, noindex = false } = Astro.props
+const {
+  business,
+  title,
+  description = '',
+  image,
+  noindex = false,
+  canonicalParams = [],
+  schema,
+} = Astro.props
 
 /**
  * Whether to offer the owner a way back into the admin.
@@ -38,7 +55,12 @@ const { business, title, description = '', image, noindex = false } = Astro.prop
 const looksSignedIn = (Astro.request.headers.get('cookie') ?? '').includes('sb-')
 
 const site = Astro.site ?? new URL('http://localhost:4321')
-const canonical = new URL(Astro.url.pathname, site).toString()
+const canonicalUrl = new URL(Astro.url.pathname, site)
+for (const key of canonicalParams) {
+  const value = Astro.url.searchParams.get(key)
+  if (value) canonicalUrl.searchParams.set(key, value)
+}
+const canonical = canonicalUrl.toString()
 const fullTitle = title === business.name ? title : `${title} · ${business.name}`
 const tel = telHref(business.phone)
 
@@ -66,6 +88,8 @@ const nav = [
     <meta property="og:url" content={canonical} />
     {image && <meta property="og:image" content={image} />}
     <meta name="twitter:card" content={image ? 'summary_large_image' : 'summary'} />
+
+    {schema && <script type="application/ld+json" set:html={JSON.stringify(schema)} />}
 
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <meta name="theme-color" content="#171b21" />

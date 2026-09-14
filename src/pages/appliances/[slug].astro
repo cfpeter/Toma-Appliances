@@ -121,8 +121,31 @@ const facts = [
 ].filter(Boolean) as { label: string; value: string }[]
 ---
 
-<Public business={business} title={product.name} description={description} image={heroImage}>
-  <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+<Public
+  business={business}
+  title={product.name}
+  description={description}
+  image={heroImage}
+  schema={[
+    jsonLd,
+    {
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'All appliances', item: new URL('/appliances', site).toString() },
+        ...(category
+          ? [{
+              '@type': 'ListItem',
+              position: 2,
+              name: category.name,
+              item: new URL(`/appliances?category=${category.slug}`, site).toString(),
+            }]
+          : []),
+        { '@type': 'ListItem', position: category ? 3 : 2, name: product.name, item: listingUrl },
+      ],
+    },
+  ]}
+>
 
   <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6">
     {signedIn && (
